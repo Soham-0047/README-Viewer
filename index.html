@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>MarkVault — Markdown Viewer</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#F5A623" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' rx='40' fill='%230C0D12'/%3E%3Ctext x='90' y='125' text-anchor='middle' font-size='100' fill='%23F5A623'%3E%E2%97%88%3C/text%3E%3C/svg%3E" />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&family=JetBrains+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+
+  <!-- marked.js v12 -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+  <!-- marked-gfm-heading-id extension -->
+  <script src="https://cdn.jsdelivr.net/npm/marked-gfm-heading-id@3.1.0/src/index.umd.js"></script>
+
+  <!-- Highlight.js -->
+  <link rel="stylesheet" id="hljs-dark"  href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark-dimmed.min.css" />
+  <link rel="stylesheet" id="hljs-light" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" disabled />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/rust.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/go.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/kotlin.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/swift.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/dockerfile.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/nginx.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/yaml.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/http.min.js"></script>
+
+  <!-- KaTeX -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+
+  <!-- Mermaid -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.0/dist/mermaid.min.js"></script>
+
+  <!-- DOMPurify -->
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.5/dist/purify.min.js"></script>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<!-- ═══ SIDEBAR ═══════════════════════════════════════════════ -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-header">
+    <div class="logo">
+      <span class="logo-mark">◈</span>
+      <span class="logo-text">MarkVault</span>
+    </div>
+    <div class="sidebar-header-right">
+      <div class="sync-badge" id="syncBadge" title="Sync status">
+        <span class="sync-dot" id="syncDot"></span>
+        <span class="sync-label" id="syncLabel">local</span>
+      </div>
+      <button class="btn-icon" id="cloudSetupBtn" title="Cloud sync settings">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 16.7A4 4 0 0017 9h-1.26A8 8 0 103 16.3"/><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/></svg>
+      </button>
+      <button class="btn-icon sidebar-close" id="sidebarClose">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="sidebar-search">
+    <div class="search-wrap">
+      <svg class="search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="search" id="searchInput" placeholder="Search… (/)" autocomplete="off" spellcheck="false" />
+      <button class="search-clear hidden" id="searchClear">✕</button>
+    </div>
+  </div>
+
+  <div class="sidebar-actions">
+    <button class="btn-action" id="newFileBtn">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      New
+    </button>
+    <button class="btn-action" id="importBtn">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      Import
+    </button>
+    <button class="btn-action" id="importUrlBtn" title="Import from URL">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
+      URL
+    </button>
+    <button class="btn-action hidden" id="syncNowBtn" title="Force sync now">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+      Sync
+    </button>
+  </div>
+
+  <nav class="file-list-wrap">
+    <div class="file-list-header">
+      <span class="file-list-label">FILES</span>
+      <span class="file-count" id="fileCount">0</span>
+    </div>
+    <ul class="file-list" id="fileList" role="listbox" aria-label="Saved files"></ul>
+  </nav>
+
+  <div class="sidebar-footer">
+    <button class="theme-btn" id="themeToggle" title="Toggle theme">
+      <span id="themeIconDark">☀︎</span>
+      <span id="themeIconLight" class="hidden">☽</span>
+    </button>
+    <span class="storage-info" id="storageInfo">0 files · 0 B</span>
+    <button class="btn-icon danger-icon" id="deleteAllBtn" title="Delete all files">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6M9 6V4h6v2"/></svg>
+    </button>
+  </div>
+</aside>
+
+<div class="sidebar-backdrop hidden" id="sidebarBackdrop"></div>
+
+<!-- ═══ MAIN ══════════════════════════════════════════════════ -->
+<main class="main" id="main">
+
+  <header class="topbar">
+    <button class="btn-icon" id="sidebarOpen" aria-label="Toggle sidebar">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
+    <div class="topbar-title" id="topbarTitle">Select or create a file</div>
+    <div class="topbar-actions">
+      <button class="btn-pill hidden" id="tocBtn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="18" y2="18"/></svg><span class="btn-label">TOC</span></button>
+      <button class="btn-pill hidden" id="editBtn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg><span class="btn-label">Edit</span></button>
+      <button class="btn-pill hidden" id="splitBtn" title="Split pane editor/preview">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+        <span class="btn-label">Split</span>
+      </button>
+      <button class="btn-pill hidden" id="findBtn" title="Find in document (Ctrl+F)">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <span class="btn-label">Find</span>
+      </button>
+      <button class="btn-pill hidden" id="copyBtn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg><span class="btn-label">Copy</span></button>
+      <button class="btn-pill hidden" id="shareBtn">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+        <span class="btn-label">Share</span>
+      </button>
+      <button class="btn-pill hidden" id="aiChatBtn">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+        <span class="btn-label">Ask AI</span>
+      </button>
+      <button class="btn-pill hidden" id="aiSummaryBtn">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+        <span class="btn-label">Summarize</span>
+      </button>
+      <button class="btn-pill hidden" id="focusBtn">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
+        <span class="btn-label">Focus</span>
+      </button>
+      <button class="btn-pill hidden" id="exportBtn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span class="btn-label">Export</span></button>
+      <button class="btn-pill hidden" id="printBtn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg><span class="btn-label">Print</span></button>
+    </div>
+  </header>
+
+  <!-- Reading progress bar -->
+  <div class="reading-progress-bar" id="readingProgressBar"><div class="reading-progress-fill" id="readingProgressFill"></div></div>
+
+  <div class="content-area">
+
+    <!-- Drop zone -->
+    <div class="drop-zone" id="dropZone">
+      <div class="drop-inner">
+        <div class="drop-anim-icon">
+          <svg width="56" height="56" viewBox="0 0 56 56" fill="none">
+            <rect x="10" y="4" width="28" height="36" rx="3" stroke="currentColor" stroke-width="1.8"/>
+            <path d="M28 4v12h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            <circle cx="28" cy="44" r="8" stroke="currentColor" stroke-width="1.8"/>
+            <path d="M25 44l2 2 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <h2 class="drop-title">Drop your Markdown here</h2>
+        <p class="drop-sub">Supports <code>.md</code> &middot; <code>.markdown</code> &middot; <code>.txt</code> &middot; <code>.pdf</code></p>
+        <div class="drop-actions">
+          <button class="btn-primary" id="browseBtn">Browse files</button>
+          <button class="btn-secondary" id="writeNewBtn">Write new</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Editor -->
+    <div class="editor-wrap hidden" id="editorWrap">
+      <div class="editor-topbar">
+        <div class="editor-name-group">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="editor-file-icon"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <input class="editor-filename" id="editorFilename" type="text" value="untitled.md" spellcheck="false" autocomplete="off" />
+        </div>
+        <div class="editor-controls">
+          <span class="editor-wordcount" id="editorWordCount">0 words</span>
+          <button class="btn-sm-accent" id="editorSaveBtn">Save ⌘S</button>
+          <button class="btn-sm-ghost" id="editorCancelBtn">Cancel</button>
+        </div>
+      </div>
+      <textarea class="editor-area" id="editorArea"
+        placeholder="# Hello World&#10;&#10;Start writing Markdown…&#10;Supports **bold**, _italic_, `code`, $math$, and Mermaid diagrams."
+        spellcheck="false" autocorrect="off" autocapitalize="off"></textarea>
+    </div>
+
+    <!-- PDF Viewer -->
+    <div class="pdf-wrap hidden" id="pdfWrap">
+      <div class="pdf-topbar" id="pdfTopbar">
+        <div class="pdf-info">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+          <span id="pdfFilename">document.pdf</span>
+          <span class="pdf-page-info" id="pdfPageInfo"></span>
+        </div>
+        <div class="pdf-actions">
+          <div class="pdf-progress hidden" id="pdfProgress">
+            <div class="pdf-progress-bar" id="pdfProgressBar"></div>
+            <span id="pdfProgressLabel">Loading…</span>
+          </div>
+          <button class="btn-pill" id="pdfConvertBtn">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+            <span>To Markdown</span>
+          </button>
+          <button class="btn-pill" id="pdfSaveBtn" title="Save rendered PDF as HTML">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <span>Save PDF</span>
+          </button>
+          <button class="btn-pill" id="pdfZoomIn" title="Zoom in">＋</button>
+          <button class="btn-pill" id="pdfZoomOut" title="Zoom out">－</button>
+        </div>
+      </div>
+      <div class="pdf-canvas-wrap" id="pdfCanvasWrap">
+        <div class="pdf-loading" id="pdfLoading">
+          <div class="pdf-spinner"></div>
+          <span id="pdfLoadLabel">Loading PDF…</span>
+        </div>
+        <div class="pdf-pages" id="pdfPages"></div>
+      </div>
+    </div>
+
+    <!-- PDF Convert modal -->
+    <div class="modal-overlay hidden" id="pdfConvertModal">
+      <div class="modal modal-wide">
+        <h3 class="modal-title">Convert PDF → Markdown</h3>
+
+        <!-- Mode tabs -->
+        <div class="convert-mode-tabs">
+          <button class="cmode-tab active" data-mode="datalab" id="cTabDatalab">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
+            Datalab
+          </button>
+          <button class="cmode-tab" data-mode="ai" id="cTabAI">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4"/></svg>
+            Gemini AI
+          </button>
+          <button class="cmode-tab" data-mode="algo" id="cTabAlgo">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+            Algorithm
+          </button>
+        </div>
+
+        <!-- ── DATALAB PANEL ── -->
+        <div class="cmode-panel" id="cPanelDatalab">
+          <p class="modal-desc">
+            <strong>Datalab</strong> uses the Marker engine — purpose-built for PDFs. Handles complex tables,
+            math, multi-column layouts, and scanned pages with near-perfect accuracy.
+            <a href="https://www.datalab.to/auth/sign_up" target="_blank" rel="noopener" class="api-key-link">Free $5 credits on sign-up →</a>
+          </p>
+
+          <!-- Options row -->
+          <div class="dl-options-row">
+            <div class="dl-option-group">
+              <label class="dl-option-label">Output format</label>
+              <select class="dl-select" id="dlOutputFormat">
+                <option value="markdown" selected>Markdown (.md)</option>
+                <option value="html">HTML (.html)</option>
+              </select>
+            </div>
+            <div class="dl-option-group">
+              <label class="dl-option-label">Processing mode</label>
+              <select class="dl-select" id="dlMode">
+                <option value="balanced" selected>Balanced (recommended)</option>
+                <option value="accurate">Accurate (best for scanned/complex)</option>
+                <option value="fast">Fast (simple PDFs)</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Multi-key manager -->
+          <div class="dl-keys-header">
+            <span class="dl-keys-title">API Keys <span class="dl-keys-hint">(tries each in order if one is exhausted)</span></span>
+            <button class="dl-add-key" id="dlAddKey">+ Add key</button>
+          </div>
+          <div class="dl-key-list" id="dlKeyList">
+            <!-- injected by JS -->
+          </div>
+          <p class="dl-no-keys hidden" id="dlNoKeys">No keys added yet. Click <strong>+ Add key</strong> to add your first Datalab API key.</p>
+        </div>
+
+        <!-- ── GEMINI PANEL ── -->
+        <div class="cmode-panel hidden" id="cPanelAI">
+          <p class="modal-desc">Uses <strong>Gemini 1.5 Flash</strong> (free) — excellent for text, tables, lists, and math.</p>
+          <div class="api-key-row">
+            <label class="api-key-label">Gemini API Key</label>
+            <div class="api-key-input-wrap">
+              <input class="modal-input api-key-input" type="password" id="geminiKeyInput" placeholder="AIzaSy…" autocomplete="off" spellcheck="false" />
+              <button class="api-key-toggle" id="geminiKeyToggle" title="Show/hide">👁</button>
+            </div>
+            <a class="api-key-link" href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Get free key →</a>
+          </div>
+          <label class="save-key-row">
+            <input type="checkbox" id="saveGeminiKey" checked />
+            <span>Remember in this browser</span>
+          </label>
+        </div>
+
+        <!-- ── ALGORITHM PANEL ── -->
+        <div class="cmode-panel hidden" id="cPanelAlgo">
+          <p class="modal-desc">Local text extraction — no API key needed, works offline. Best for simple, text-heavy PDFs. Complex tables and multi-column layouts may need manual cleanup.</p>
+        </div>
+
+        <!-- Progress -->
+        <div class="convert-progress hidden" id="convertProgress">
+          <div class="convert-bar-wrap"><div class="convert-bar" id="convertBar"></div></div>
+          <span class="convert-label" id="convertLabel">Starting…</span>
+        </div>
+        <p class="convert-error hidden" id="convertError"></p>
+
+        <div class="modal-footer">
+          <button class="btn-sm-accent" id="pdfConvertStart">Convert &amp; Save</button>
+          <button class="btn-sm-ghost" id="pdfConvertCancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Preview -->
+    <div class="preview-wrap hidden" id="previewWrap">
+      <div class="preview-meta-bar" id="previewMeta"></div>
+      <div class="preview-with-chat">
+        <div class="preview-scroll" id="previewScroll">
+          <article class="markdown-body" id="markdownBody"></article>
+        </div>
+        <!-- AI Chat panel (slides in from right) -->
+        <div class="ai-chat-panel hidden" id="aiChatPanel">
+          <div class="ai-chat-header">
+            <div class="ai-chat-title">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+              Chat with doc
+            </div>
+            <div class="ai-chat-header-actions">
+              <button class="ai-chat-clear" id="aiChatClear" title="Clear chat">↺</button>
+              <button class="ai-chat-close" id="aiChatClose" title="Close">✕</button>
+            </div>
+          </div>
+          <div class="ai-chat-messages" id="aiChatMessages">
+            <div class="ai-chat-welcome">
+              <div class="ai-chat-welcome-icon">◈</div>
+              <p>Ask anything about this document.</p>
+              <div class="ai-chat-starters" id="aiChatStarters"></div>
+            </div>
+          </div>
+          <div class="ai-chat-input-area">
+            <div class="ai-chat-input-wrap">
+              <textarea class="ai-chat-input" id="aiChatInput"
+                placeholder="Ask about this document…"
+                rows="1" maxlength="2000"></textarea>
+              <button class="ai-chat-send" id="aiChatSend" title="Send (Enter)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              </button>
+            </div>
+            <p class="ai-chat-provider" id="aiChatProvider"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /content-area -->
+
+  <!-- TOC -->
+  <div class="toc-panel hidden" id="tocPanel">
+    <div class="toc-header">
+      <span>Contents</span>
+      <button class="btn-icon" id="tocClose">✕</button>
+    </div>
+    <nav id="tocContent"></nav>
+  </div>
+
+  <!-- Mobile bottom bar -->
+  <nav class="bottom-nav hidden" id="bottomNav">
+    <button class="bn-item" id="bnFiles">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+      <span>Files</span>
+    </button>
+    <button class="bn-item hidden" id="bnEdit">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+      <span>Edit</span>
+    </button>
+    <button class="bn-item hidden" id="bnExport">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      <span>Export</span>
+    </button>
+    <button class="bn-item" id="bnNew">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+      <span>New</span>
+    </button>
+  </nav>
+
+</main>
+
+<!-- Image lightbox -->
+<div class="lightbox hidden" id="lightbox">
+  <button class="lightbox-close" id="lightboxClose">✕</button>
+  <div class="lightbox-inner"><img id="lightboxImg" src="" alt="" /></div>
+</div>
+
+<!-- Hidden inputs & modals -->
+<input type="file" id="fileInput" accept=".md,.markdown,.txt,.pdf" multiple style="display:none" />
+<script src="js/pdfhandler.js"></script>
+<div class="toast-container" id="toastContainer" aria-live="polite"></div>
+
+<!-- Confirm -->
+<div class="modal-overlay hidden" id="modalOverlay">
+  <div class="modal">
+    <p class="modal-msg" id="modalMsg"></p>
+    <div class="modal-footer">
+      <button class="btn-sm-danger" id="modalConfirm">Delete</button>
+      <button class="btn-sm-ghost" id="modalCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- New file -->
+<div class="modal-overlay hidden" id="newFileOverlay">
+  <div class="modal">
+    <p class="modal-msg">Create a new file</p>
+    <input class="modal-input" id="newFileName" type="text" placeholder="filename.md" autocomplete="off" />
+    <div class="modal-footer">
+      <button class="btn-sm-accent" id="newFileCreate">Create</button>
+      <button class="btn-sm-ghost" id="newFileCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Cloud setup -->
+<div class="modal-overlay hidden" id="cloudModal">
+  <div class="modal modal-wide">
+    <h3 class="modal-title">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:6px"><path d="M20 16.7A4 4 0 0017 9h-1.26A8 8 0 103 16.3"/><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/></svg>
+      Cloud Sync — Firebase Setup
+    </h3>
+    <p class="modal-desc">
+      Connect Firebase Firestore to sync files across every device and browser.
+      Free tier handles thousands of files with ease.
+    </p>
+    <details class="setup-steps">
+      <summary>How to set up (takes ~3 minutes)</summary>
+      <ol class="setup-list">
+        <li>Open <a href="https://console.firebase.google.com" target="_blank" rel="noopener">console.firebase.google.com</a></li>
+        <li>Create a project → click <strong>Web</strong> to add an app</li>
+        <li>In Build → <strong>Firestore Database</strong> → Create database → Start in <em>test mode</em></li>
+        <li>Go to Project settings → copy the <code>firebaseConfig</code> object</li>
+        <li>Paste the JSON below and click <strong>Connect</strong></li>
+      </ol>
+    </details>
+    <textarea class="cloud-input" id="cloudConfigInput" rows="9"
+      placeholder='{&#10;  "apiKey": "AIzaSy...",&#10;  "authDomain": "my-project.firebaseapp.com",&#10;  "projectId": "my-project-id",&#10;  "storageBucket": "my-project.appspot.com",&#10;  "messagingSenderId": "123456789",&#10;  "appId": "1:123456789:web:abc..."&#10;}'></textarea>
+    <p class="cloud-error hidden" id="cloudError"></p>
+    <div class="cloud-connecting hidden" id="cloudConnecting">
+      <span class="sync-dot syncing"></span> Connecting to Firestore…
+    </div>
+    <div class="modal-footer">
+      <button class="btn-sm-accent" id="cloudConnect">Connect &amp; Sync</button>
+      <button class="btn-sm-ghost" id="cloudDisconnect" style="display:none">Disconnect</button>
+      <button class="btn-sm-ghost" id="cloudCancel">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Share modal -->
+<div class="modal-overlay hidden" id="shareModal">
+  <div class="modal modal-wide">
+    <h3 class="modal-title">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:7px"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+      Share "<span id="shareFileName">file</span>"
+    </h3>
+
+    <div class="share-requires-cloud hidden" id="shareRequiresCloud">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 16.7A4 4 0 0017 9h-1.26A8 8 0 103 16.3"/></svg>
+      <span>Share links require <strong>Firebase sync</strong> to be connected — the link is stored in Firestore so anyone can access it.</span>
+      <button class="btn-sm-accent" id="shareGoCloud">Connect Firebase</button>
+    </div>
+
+    <div class="share-panel" id="sharePanel">
+      <!-- Active link display -->
+      <div class="share-link-wrap hidden" id="shareLinkWrap">
+        <label class="share-link-label">Share link</label>
+        <div class="share-link-row">
+          <input class="share-link-input" id="shareLinkInput" type="text" readonly />
+          <button class="share-copy-btn" id="shareCopyLink" title="Copy link">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+          </button>
+          <button class="share-qr-btn" id="shareQRBtn" title="Show QR code">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="3" height="3"/></svg>
+          </button>
+        </div>
+        <div class="share-meta-row">
+          <span class="share-meta-info" id="shareLinkMeta"></span>
+          <button class="share-revoke-btn" id="shareRevokeBtn">Revoke link</button>
+        </div>
+      </div>
+
+      <!-- No link yet -->
+      <div class="share-no-link" id="shareNoLink">
+        <div class="share-no-link-icon">🔒</div>
+        <p class="share-no-link-title">This file is private</p>
+        <p class="share-no-link-sub">Generate a secret link to share it. Only people with the link can view it.</p>
+      </div>
+
+      <!-- Expiry option -->
+      <div class="share-options">
+        <label class="share-opt-label">Link expiry</label>
+        <select class="dl-select" id="shareExpiry">
+          <option value="never">Never expires</option>
+          <option value="7">7 days</option>
+          <option value="30">30 days</option>
+          <option value="1">24 hours</option>
+        </select>
+        <label class="share-opt-label" style="margin-left:8px">Views</label>
+        <select class="dl-select" id="shareMaxViews">
+          <option value="0">Unlimited</option>
+          <option value="1">1 time</option>
+          <option value="10">10 times</option>
+          <option value="100">100 times</option>
+        </select>
+      </div>
+
+      <!-- QR code container -->
+      <div class="share-qr-wrap hidden" id="shareQRWrap">
+        <canvas id="shareQRCanvas" width="160" height="160"></canvas>
+        <p class="share-qr-hint">Scan to open on any device</p>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn-sm-accent" id="shareGenerate">Generate Link</button>
+      <button class="btn-sm-ghost" id="shareManageBtn">Manage all links</button>
+      <button class="btn-sm-ghost" id="shareClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Manage links modal -->
+<div class="modal-overlay hidden" id="manageLinksModal">
+  <div class="modal modal-wide">
+    <h3 class="modal-title">Shared Links</h3>
+    <div class="managed-links-list" id="managedLinksList">
+      <p style="color:var(--txt3);font-size:13px;text-align:center;padding:20px">Loading…</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-sm-ghost" id="manageLinksClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Focus / Zen mode overlay -->
+<div class="focus-overlay hidden" id="focusOverlay">
+  <div class="focus-topbar" id="focusTopbar">
+    <span class="focus-title" id="focusTitle"></span>
+    <div class="focus-controls">
+      <button class="focus-ctrl" id="focusFontDec" title="Smaller text">A-</button>
+      <button class="focus-ctrl" id="focusFontInc" title="Larger text">A+</button>
+      <select class="focus-width-sel" id="focusWidthSel" title="Line width">
+        <option value="600">Narrow</option>
+        <option value="720" selected>Normal</option>
+        <option value="900">Wide</option>
+        <option value="100%">Full</option>
+      </select>
+      <button class="focus-ctrl" id="focusTheme" title="Toggle theme">☀︎</button>
+      <button class="focus-exit" id="focusExit" title="Exit focus mode (Esc)">✕ Exit</button>
+    </div>
+  </div>
+  <div class="focus-progress-bar"><div class="focus-progress-fill" id="focusProgressFill"></div></div>
+  <div class="focus-scroll" id="focusScroll">
+    <article class="markdown-body focus-body" id="focusBody"></article>
+  </div>
+</div>
+
+<!-- Shared-link read-only viewer (shown when ?share=TOKEN in URL) -->
+<div class="shared-viewer hidden" id="sharedViewer">
+  <div class="shared-viewer-topbar">
+    <div class="shared-viewer-brand">
+      <span class="logo-mark">◈</span>
+      <span class="logo-text">MarkVault</span>
+      <span class="shared-viewer-badge">Shared View</span>
+    </div>
+    <div class="shared-viewer-actions">
+      <button class="btn-pill" id="svSaveToVault" title="Save a copy to your vault">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+        Save to my Vault
+      </button>
+      <button class="btn-pill" id="svFocus" title="Focus mode">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
+        Focus
+      </button>
+      <a class="btn-pill" href="." title="Open MarkVault">Open App</a>
+    </div>
+  </div>
+  <div class="shared-viewer-meta" id="svMeta"></div>
+  <div class="shared-viewer-scroll">
+    <div class="shared-viewer-loading hidden" id="svLoading">
+      <div class="pdf-spinner"></div>
+      <span>Loading shared file…</span>
+    </div>
+    <div class="shared-viewer-error hidden" id="svError">
+      <div style="font-size:48px">🔒</div>
+      <p id="svErrorMsg">This link is invalid or has expired.</p>
+      <a href="." class="btn-primary" style="display:inline-block;margin-top:16px;text-decoration:none">Open MarkVault</a>
+    </div>
+    <article class="markdown-body" id="svBody" style="max-width:800px;margin:0 auto;padding:32px 24px 80px"></article>
+  </div>
+  <div class="shared-viewer-footer">
+    <a href="." class="sv-footer-brand">◈ MarkVault</a>
+    <span class="sv-footer-tag">Private file sharing for Markdown documents</span>
+    <a href="." class="sv-footer-cta">Create your free vault →</a>
+  </div>
+</div>
+
+<!-- ═══ COMMAND PALETTE (Cmd+K) ════════════════════════ -->
+<div class="modal-overlay hidden" id="commandPalette">
+  <div class="cp-modal">
+    <div class="cp-input-wrap">
+      <svg class="cp-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input class="cp-input" id="cpInput" type="text" placeholder="Search files, headings, actions…" autocomplete="off" spellcheck="false" />
+      <kbd class="cp-esc">Esc</kbd>
+    </div>
+    <div class="cp-list" id="cpList"></div>
+    <div class="cp-footer">
+      <span><kbd>↑↓</kbd> navigate</span>
+      <span><kbd>↵</kbd> select</span>
+      <span><kbd>Esc</kbd> close</span>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ AI WRITING TOOLS (floating toolbar) ════════════ -->
+<div class="writing-tools-bar hidden" id="writingToolsBar">
+  <div class="wt-header">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+    AI Writing Tools
+  </div>
+  <div class="wt-tools" id="wtTools"></div>
+  <!-- Translate sub-panel -->
+  <div class="wt-translate hidden" id="wtTranslate">
+    <input class="wt-lang-input" id="wtLangInput" type="text" placeholder="Language (e.g. French, Hindi, Arabic…)" />
+    <button class="wt-go" id="wtTranslateGo">Translate</button>
+  </div>
+  <div class="wt-result hidden" id="wtResult">
+    <div class="wt-result-header">
+      <span class="wt-result-label" id="wtResultLabel">Result</span>
+      <button class="wt-accept" id="wtAccept">✓ Replace selection</button>
+      <button class="wt-discard" id="wtDiscard">✕ Discard</button>
+    </div>
+    <div class="wt-result-text" id="wtResultText"></div>
+  </div>
+  <button class="wt-close" id="wtClose">✕</button>
+</div>
+
+<!-- ═══ AI SUMMARY MODAL ════════════════════════════════ -->
+<div class="modal-overlay hidden" id="aiSummaryModal">
+  <div class="modal modal-wide">
+    <h3 class="modal-title">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:7px"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+      AI Document Summary
+    </h3>
+    <div class="ai-summary-tags hidden" id="aiSummaryTags"></div>
+    <div class="ai-summary-body" id="aiSummaryBody">
+      <div class="ai-thinking"><div class="ai-thinking-dots"><span></span><span></span><span></span></div>Analyzing document…</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-sm-accent" id="aiSummarySave">Save as note</button>
+      <button class="btn-sm-ghost" id="aiSummaryClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ AI SETTINGS MODAL ════════════════════════════════ -->
+<div class="modal-overlay hidden" id="aiSettingsModal">
+  <div class="modal modal-wide">
+    <h3 class="modal-title">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:7px"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+      AI Provider Keys
+    </h3>
+    <p class="modal-desc">All keys stored only in your browser. Provider is tried in order — first one that responds wins. All are free tier.</p>
+    <div class="ai-providers-list" id="aiProvidersList"></div>
+    <div class="modal-footer">
+      <button class="btn-sm-accent" id="aiSettingsSave">Save keys</button>
+      <button class="btn-sm-ghost" id="aiSettingsClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- AI settings gear in sidebar footer (added via JS) -->
+
+<!-- ═══ TEMPLATES MODAL ═══════════════════════════════ -->
+<div class="modal-overlay hidden" id="templatesModal">
+  <div class="modal modal-wide">
+    <h3 class="modal-title">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:7px"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      Choose a template
+    </h3>
+    <div class="template-categories" id="templateCategories"></div>
+    <div class="template-grid" id="templateGrid"></div>
+    <div class="modal-footer">
+      <button class="btn-sm-ghost" id="templateClose">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ IMPORT FROM URL MODAL ════════════════════════ -->
+<div class="modal-overlay hidden" id="importUrlModal">
+  <div class="modal">
+    <h3 class="modal-title">Import from URL</h3>
+    <p class="modal-desc">Paste any public URL to a Markdown file — GitHub raw, HackMD, Gist, Pastebin, or any direct .md link.</p>
+    <input class="modal-input" id="importUrlInput" type="url"
+      placeholder="https://raw.githubusercontent.com/user/repo/main/README.md"
+      autocomplete="off" spellcheck="false" />
+    <div class="import-url-examples">
+      <span class="import-url-hint">Supports:</span>
+      <code>github.com</code> <code>gist.github.com</code>
+      <code>hackmd.io</code> <code>pastebin.com</code>
+    </div>
+    <p class="convert-error hidden" id="importUrlError"></p>
+    <div class="modal-footer">
+      <button class="btn-sm-accent" id="importUrlGo">Import</button>
+      <button class="btn-sm-ghost" id="importUrlCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ IN-DOCUMENT SEARCH BAR ═══════════════════════ -->
+<div class="find-bar hidden" id="findBar">
+  <div class="find-bar-inner">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--txt3);flex-shrink:0"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input class="find-input" id="findInput" type="text" placeholder="Find in document…" autocomplete="off" spellcheck="false" />
+    <span class="find-count" id="findCount"></span>
+    <button class="find-nav" id="findPrev" title="Previous (Shift+Enter)">↑</button>
+    <button class="find-nav" id="findNext" title="Next (Enter)">↓</button>
+    <label class="find-case-label" title="Match case">
+      <input type="checkbox" id="findCase" /> Aa
+    </label>
+    <button class="find-close" id="findClose">✕</button>
+  </div>
+</div>
+
+<!-- ═══ UNSAVED INDICATOR ════════════════════════════ -->
+<div class="unsaved-badge hidden" id="unsavedBadge">
+  <span class="unsaved-dot"></span> Unsaved
+  <button id="unsavedSaveBtn">Save ⌘S</button>
+</div>
+
+<!-- ═══ KEYBOARD SHORTCUTS HELP ══════════════════════ -->
+<div class="modal-overlay hidden" id="helpModal">
+  <div class="modal modal-wide">
+    <h3 class="modal-title">Keyboard Shortcuts</h3>
+    <div class="help-grid">
+      <div class="help-section">
+        <div class="help-section-title">Navigation</div>
+        <div class="help-row"><kbd>⌘K</kbd><span>Command palette</span></div>
+        <div class="help-row"><kbd>⌘F</kbd><span>Find in document</span></div>
+        <div class="help-row"><kbd>/</kbd><span>Focus search</span></div>
+        <div class="help-row"><kbd>Esc</kbd><span>Close / Cancel</span></div>
+      </div>
+      <div class="help-section">
+        <div class="help-section-title">Files</div>
+        <div class="help-row"><kbd>⌘S</kbd><span>Save file</span></div>
+        <div class="help-row"><kbd>⌘⇧N</kbd><span>New file</span></div>
+        <div class="help-row"><kbd>⌘E</kbd><span>Edit current file</span></div>
+      </div>
+      <div class="help-section">
+        <div class="help-section-title">Editor</div>
+        <div class="help-row"><kbd>⌘/</kbd><span>AI writing tools</span></div>
+        <div class="help-row"><kbd>Tab</kbd><span>Indent (2 spaces)</span></div>
+        <div class="help-row"><kbd>⌘Z</kbd><span>Undo</span></div>
+      </div>
+      <div class="help-section">
+        <div class="help-section-title">AI</div>
+        <div class="help-row"><kbd>⌘⇧S</kbd><span>AI summarize</span></div>
+        <div class="help-row"><kbd>⌘⇧F</kbd><span>Focus mode</span></div>
+        <div class="help-row"><kbd>?</kbd><span>This help screen</span></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-sm-ghost" id="helpClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ PWA INSTALL BANNER ═══════════════════════════ -->
+<div class="pwa-banner hidden" id="pwaBanner">
+  <div class="pwa-banner-icon">◈</div>
+  <div class="pwa-banner-text">
+    <strong>Install MarkVault</strong>
+    <span>Works offline · No app store needed</span>
+  </div>
+  <button class="btn-sm-accent" id="pwaInstall">Install</button>
+  <button class="pwa-dismiss" id="pwaDismiss">✕</button>
+</div>
+
+<!-- ═══ SPLIT PANE EDITOR (replaces editor-wrap on split mode) ══ -->
+<div class="split-wrap hidden" id="splitWrap">
+  <div class="split-editor-pane">
+    <div class="split-pane-label">EDITOR <span class="unsaved-dot-split hidden" id="splitUnsavedDot"></span></div>
+    <textarea class="editor-area" id="splitEditorArea"
+      spellcheck="false" autocorrect="off" autocapitalize="off"></textarea>
+  </div>
+  <div class="split-divider" id="splitDivider"></div>
+  <div class="split-preview-pane">
+    <div class="split-pane-label">PREVIEW</div>
+    <div class="split-preview-scroll">
+      <article class="markdown-body" id="splitPreviewBody" style="padding:20px 28px"></article>
+    </div>
+  </div>
+</div>
+
+<script src="js/storage.js"></script>
+<script src="js/renderer.js"></script>
+<script src="js/sharing.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/templates.js"></script>
+<script src="js/pdfhandler.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
