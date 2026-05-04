@@ -879,33 +879,67 @@ const App = (() => {
   function openCloudModal() {
     const saved = Storage.getSavedConfig();
     if (saved) el.cloudConfigInput.value = saved;
-    el.cloudError.classList.add('hidden');
-    el.cloudConnecting.classList.add('hidden');
-    el.cloudDisconnect.style.display = Storage.isConnected() ? 'inline-flex' : 'none';
+    el.cloudError?.classList.add('hidden');
+    el.cloudConnecting?.classList.add('hidden');
+
+    const isConn   = Storage.isConnected();
+    const isSigned = Storage.isSignedIn();
+    const user     = Storage.getCurrentUser();
+
+    // Show/hide config vs sign-in sections
+    document.getElementById('cloudStepConfig')?.classList.toggle('hidden', isConn && isSigned);
+    const signinSection = document.getElementById('cloudSigninSection');
+    if (signinSection) signinSection.classList.toggle('hidden', !isConn || isSigned);
+
+    // Update sign-in status text
+    const statusEl = document.getElementById('cloudSigninStatus');
+    if (statusEl) {
+      if (isSigned && user) {
+        statusEl.innerHTML = `<div class="cloud-user-row">
+          ${user.photoURL ? `<img src="${user.photoURL}" class="cloud-user-photo" />` : ''}
+          <div>
+            <strong>${_esc(user.displayName || 'Signed in')}</strong>
+            <span>${_esc(user.email || '')}</span>
+          </div>
+          <span class="sync-dot connected" style="flex-shrink:0"></span>
+        </div>`;
+      } else if (isConn) {
+        statusEl.innerHTML = `<p style="font-size:12.5px;color:var(--txt2)">Firebase connected. Sign in with Google to sync across devices.</p>`;
+      }
+    }
+
+    // Button visibility
+    if (el.cloudDisconnect) el.cloudDisconnect.style.display = isConn ? 'inline-flex' : 'none';
+    const signOutBtn = document.getElementById('cloudSignOutBtn');
+    if (signOutBtn)   signOutBtn.style.display = isSigned ? 'inline-flex' : 'none';
+    if (el.cloudConnect) el.cloudConnect.style.display = isConn ? 'none' : 'inline-flex';
+
     el.cloudModal.classList.remove('hidden');
   }
 
   async function handleCloudConnect() {
-    const raw = el.cloudConfigInput.value.trim();
+    const raw = el.cloudConfigInput?.value?.trim();
     if (!raw) { _showCloudError('Paste your Firebase config JSON above.'); return; }
-    el.cloudError.classList.add('hidden');
-    el.cloudConnecting.classList.remove('hidden');
-    el.cloudConnect.disabled = true;
+    el.cloudError?.classList.add('hidden');
+    el.cloudConnecting?.classList.remove('hidden');
+    if (el.cloudConnect) el.cloudConnect.disabled = true;
     try {
       await Storage.connectFirebase(raw);
-      el.cloudConnecting.classList.add('hidden');
-      el.cloudConnect.disabled = false;
-      el.cloudModal.classList.add('hidden');
-      toast('☁ Connected to Firebase! Files are now syncing across devices.', 'success', 4000);
+      el.cloudConnecting?.classList.add('hidden');
+      if (el.cloudConnect) el.cloudConnect.disabled = false;
+      toast('☁ Firebase connected!', 'success', 2500);
       refreshList();
+      // Show the sign-in section without closing modal
+      openCloudModal();
     } catch(e) {
-      el.cloudConnecting.classList.add('hidden');
-      el.cloudConnect.disabled = false;
+      el.cloudConnecting?.classList.add('hidden');
+      if (el.cloudConnect) el.cloudConnect.disabled = false;
       _showCloudError(e.message);
     }
   }
 
   function _showCloudError(msg) {
+    if (!el.cloudError) return;
     el.cloudError.textContent = '⚠ ' + msg;
     el.cloudError.classList.remove('hidden');
   }
@@ -913,7 +947,7 @@ const App = (() => {
   async function handleCloudDisconnect() {
     await Storage.disconnectFirebase(true);
     el.cloudModal.classList.add('hidden');
-    toast('Disconnected from cloud — using local storage only', 'info');
+    toast('Disconnected — local only', 'info');
     refreshList();
   }
 
@@ -1291,6 +1325,27 @@ sequenceDiagram
     el.cloudConnect.addEventListener('click',    handleCloudConnect);
     el.cloudDisconnect.addEventListener('click', handleCloudDisconnect);
     el.cloudCancel.addEventListener('click', () => el.cloudModal.classList.add('hidden'));
+
+    // Sign-in from inside cloud modal
+    document.getElementById('cloudGoogleSignIn')?.addEventListener('click', async () => {
+      const btn = document.getElementById('cloudGoogleSignIn');
+      try {
+        if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
+        await Storage.signInWithGoogle();
+        // _handleAuthChange fires → closes gate + boots app
+        el.cloudModal.classList.add('hidden');
+      } catch(e) {
+        if (btn) { btn.disabled = false; btn.textContent = 'Sign in with Google'; }
+        if (e.message && !e.message.includes('popup')) _showCloudError(e.message);
+      }
+    });
+
+    // Sign out from cloud modal
+    document.getElementById('cloudSignOutBtn')?.addEventListener('click', async () => {
+      await Storage.signOut();
+      el.cloudModal.classList.add('hidden');
+      toast('Signed out — files still available locally', 'info', 3000);
+    });
     el.cloudModal.addEventListener('click', e => {
       if (e.target === el.cloudModal) el.cloudModal.classList.add('hidden');
     });
@@ -1491,6 +1546,7 @@ sequenceDiagram
 
     // ── PWA ────────────────────────────────────────────
     _initPWA();
+    _initAccountMenu();
 
     // Keyboard
     _initKeyboard();
@@ -1519,17 +1575,19 @@ sequenceDiagram
       toast('Files updated from cloud', 'info', 2000);
     });
 
-    // Auto-connect Firebase
-    const connected = await Storage.autoConnect();
-    if (connected) toast('☁ Cloud sync active', 'success', 2500);
+    // ── Auth state hook ────────────────────────────────
+    Storage.onAuthChange(_handleAuthChange);
 
-    // Handle ?share=TOKEN (shared viewer mode)
+    // ── Auto-connect Firebase (restores saved config) ──
+    const connected = await Storage.autoConnect();
+
+    // Handle ?share=TOKEN (shared viewer — works without auth)
     if (SharedViewer.isSharedView()) {
       await SharedViewer.init(Storage.getDB());
-      return; // Don't load normal app UI
+      return;
     }
 
-    // Handle ?open=FILE_ID (from "Save to vault" redirect)
+    // Handle ?open=FILE_ID redirect from "Save to vault"
     const openParam = new URLSearchParams(window.location.search).get('open');
     if (openParam && Storage.load(openParam)) {
       await openFile(openParam);
@@ -1537,7 +1595,73 @@ sequenceDiagram
       return;
     }
 
-    // Load last open file or demo
+    // If Firebase is NOT connected at all → show auth gate
+    if (!connected) {
+      _showAuthGate();
+      return;
+    }
+
+    // Firebase connected but not signed in yet →
+    // onAuthStateChanged will call _handleAuthChange when it resolves.
+    // If already signed in (returning visit), _handleAuthChange fires immediately.
+    // If not signed in, show auth gate after a short timeout.
+    setTimeout(() => {
+      if (!Storage.isSignedIn() && !_authGateDismissed) {
+        _showAuthGate();
+      }
+    }, 1200);
+  }
+
+  // ── Auth gate + sign-in flow ──────────────────────────
+  let _authGateDismissed = false;
+
+  function _showAuthGate() {
+    const gate = document.getElementById('authGate');
+    if (!gate) return;
+    gate.classList.remove('hidden');
+
+    document.getElementById('authGoogleSignIn')?.addEventListener('click', async () => {
+      try {
+        const btn = document.getElementById('authGoogleSignIn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
+        await Storage.signInWithGoogle();
+        // onAuthChange fires → _handleAuthChange closes the gate
+      } catch(e) {
+        const btn = document.getElementById('authGoogleSignIn');
+        if (btn) { btn.disabled = false; btn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg> Continue with Google`; }
+        if (e.message && !e.message.includes('popup')) toast('Sign-in failed: ' + e.message, 'error', 5000);
+      }
+    }, { once: true });
+
+    document.getElementById('authSkip')?.addEventListener('click', () => {
+      _authGateDismissed = true;
+      gate.classList.add('hidden');
+      _bootApp();
+    }, { once: true });
+  }
+
+  async function _handleAuthChange(user) {
+    // Close auth gate if open
+    document.getElementById('authGate')?.classList.add('hidden');
+    _authGateDismissed = true;
+
+    if (user) {
+      // Update avatar
+      _updateAvatar(user);
+      document.getElementById('userAvatarBtn')?.classList.remove('hidden');
+      toast(`Welcome${user.displayName ? ', ' + user.displayName.split(' ')[0] : ''}! ◈`, 'success', 3000);
+      // Boot the app content
+      await _bootApp();
+    } else {
+      // Signed out
+      document.getElementById('userAvatarBtn')?.classList.add('hidden');
+      document.getElementById('accountMenu')?.classList.add('hidden');
+    }
+  }
+
+  async function _bootApp() {
+    const prefs = Storage.getPrefs();
+    refreshList();
     const lastId = prefs.lastOpenId;
     if (lastId && Storage.load(lastId)) {
       await openFile(lastId);
@@ -1547,6 +1671,77 @@ sequenceDiagram
       const files = Storage.list();
       if (files.length > 0) await openFile(files[0].id);
     }
+  }
+
+  function _updateAvatar(user) {
+    const initEl = document.getElementById('userAvatarInitials');
+    const imgEl  = document.getElementById('userAvatarImg');
+    if (user.photoURL && imgEl) {
+      imgEl.src = user.photoURL;
+      imgEl.classList.remove('hidden');
+      if (initEl) initEl.style.display = 'none';
+    } else if (initEl) {
+      const name = user.displayName || user.email || '?';
+      initEl.textContent = name.charAt(0).toUpperCase();
+      initEl.style.display = '';
+    }
+  }
+
+  // ── Account menu ───────────────────────────────────────
+  function _initAccountMenu() {
+    const avatarBtn = document.getElementById('userAvatarBtn');
+    const menu      = document.getElementById('accountMenu');
+    if (!avatarBtn || !menu) return;
+
+    avatarBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      const user = Storage.getCurrentUser();
+      if (!user) return;
+
+      // Populate
+      const photo = document.getElementById('accountMenuPhoto');
+      if (photo && user.photoURL) { photo.src = user.photoURL; photo.classList.remove('hidden'); }
+      const nameEl  = document.getElementById('accountMenuName');
+      const emailEl = document.getElementById('accountMenuEmail');
+      if (nameEl)  nameEl.textContent  = user.displayName || 'MarkVault User';
+      if (emailEl) emailEl.textContent = user.email || '';
+
+      const statsEl = document.getElementById('accountMenuStats');
+      if (statsEl) {
+        const s = Storage.stats();
+        statsEl.textContent = s.label;
+      }
+
+      menu.classList.toggle('hidden');
+    });
+
+    document.getElementById('accountMenuSignOut')?.addEventListener('click', async () => {
+      menu.classList.add('hidden');
+      await Storage.signOut();
+      toast('Signed out — files still available locally', 'info', 3000);
+    });
+
+    document.getElementById('accountMenuDeleteData')?.addEventListener('click', () => {
+      menu.classList.add('hidden');
+      const user = Storage.getCurrentUser();
+      confirm(
+        `Delete ALL files for ${user?.email || 'your account'}? This removes them from every device. Cannot be undone.`,
+        async () => {
+          Storage.removeAll();
+          S.activeId = null; S.mode = 'drop';
+          setMode('drop'); _showPreviewButtons(false);
+          refreshList();
+          toast('All data deleted', 'info');
+        }
+      );
+    });
+
+    // Close menu on outside click
+    document.addEventListener('click', e => {
+      if (!menu.classList.contains('hidden') && !menu.contains(e.target) && e.target !== avatarBtn) {
+        menu.classList.add('hidden');
+      }
+    });
   }
 
   // ── Share modal logic ──────────────────────────────────
@@ -2160,51 +2355,79 @@ sequenceDiagram
   // ══════════════════════════════════════════════════════
   //  SPLIT PANE
   // ══════════════════════════════════════════════════════
-  let _splitRenderTimer = null;
+  // ══════════════════════════════════════════════════════
+  //  SPLIT PANE — full rewrite
+  // ══════════════════════════════════════════════════════
+  let _splitRenderTimer  = null;
+  let _splitDividerBound = false;
 
   function _enterSplitMode() {
     if (!S.activeId) { toast('Open a file first', 'info'); return; }
     const file = Storage.load(S.activeId);
     if (!file) return;
 
+    // Close sidebar on mobile so it never overlays split view
+    if (_isMobile()) closeSidebar();
+
     S.splitMode = true;
     S.mode      = 'split';
 
-    // Populate split editor
-    const splitEditor = document.getElementById('splitEditorArea');
-    if (splitEditor) {
-      splitEditor.value = file.content;
-      el.editorFilename && (el.editorFilename.value = file.name);
-    }
-
-    // Show/hide panels
+    // Hide all other content panels
+    el.dropZone.classList.add('hidden');
     el.editorWrap?.classList.add('hidden');
     el.previewWrap?.classList.add('hidden');
-    document.getElementById('splitWrap')?.classList.remove('hidden');
-    el.topbarTitle.textContent = file.name;
-    el.splitBtn?.classList.add('split-active');
+    if (el.pdfWrap) el.pdfWrap.classList.add('hidden');
+    el.tocPanel.classList.add('hidden');
+    S.tocOpen = false;
 
-    // Initial render
+    const splitWrap = document.getElementById('splitWrap');
+    splitWrap?.classList.remove('hidden');
+
+    // Clear any previous inline flex overrides so CSS media queries work fresh
+    const edPane = splitWrap?.querySelector('.split-editor-pane');
+    const pvPane = splitWrap?.querySelector('.split-preview-pane');
+    if (edPane)  { edPane.style.flex  = ''; edPane.style.height  = ''; }
+    if (pvPane)  { pvPane.style.flex  = ''; pvPane.style.height  = ''; }
+
+    // Populate editor
+    const splitEditor = document.getElementById('splitEditorArea');
+    if (splitEditor) splitEditor.value = file.content;
+
+    el.topbarTitle.textContent = file.name;
+
+    // Show split button as active; hide other preview-only buttons
+    _showPreviewButtons(false);
+    const splitBtn = document.getElementById('splitBtn');
+    if (splitBtn) { splitBtn.classList.remove('hidden'); splitBtn.classList.add('split-active'); }
+
+    // Initial preview render
     _splitRender(file.content);
 
-    // Live typing → debounced render
+    // Remove stale listeners before adding fresh ones
+    splitEditor?.removeEventListener('input', _onSplitInput);
+    splitEditor?.removeEventListener('input', _markDirty);
     splitEditor?.addEventListener('input', _onSplitInput);
-
-    // Divider drag
-    _initSplitDivider();
-
-    // Auto-save dirty tracking
     splitEditor?.addEventListener('input', _markDirty);
+
+    _initSplitDivider();
   }
 
   function _exitSplitMode() {
     S.splitMode = false;
+    if (_splitRenderTimer) { clearTimeout(_splitRenderTimer); _splitRenderTimer = null; }
+
+    // Save before leaving
+    _autoSave();
+
     document.getElementById('splitWrap')?.classList.add('hidden');
-    el.splitBtn?.classList.remove('split-active');
+    const splitBtn = document.getElementById('splitBtn');
+    if (splitBtn) splitBtn.classList.remove('split-active');
+
     const splitEditor = document.getElementById('splitEditorArea');
     splitEditor?.removeEventListener('input', _onSplitInput);
     splitEditor?.removeEventListener('input', _markDirty);
-    // Return to preview with any changes
+
+    S.mode = 'preview';
     if (S.activeId) openFile(S.activeId);
   }
 
@@ -2213,7 +2436,7 @@ sequenceDiagram
     _splitRenderTimer = setTimeout(() => {
       const val = document.getElementById('splitEditorArea')?.value || '';
       _splitRender(val);
-    }, 300);
+    }, 280);
   }
 
   async function _splitRender(content) {
@@ -2223,31 +2446,71 @@ sequenceDiagram
   }
 
   function _initSplitDivider() {
+    if (_splitDividerBound) return;
+    _splitDividerBound = true;
+
     const divider = document.getElementById('splitDivider');
     const wrap    = document.getElementById('splitWrap');
     if (!divider || !wrap) return;
 
-    let startX = 0, startLeftW = 0;
+    const isMobileLayout = () => window.innerWidth <= 640;
+
+    function applyRatio(primaryPx) {
+      if (isMobileLayout()) return;
+      const total = wrap.offsetWidth - 4;
+      const pct   = Math.max(25, Math.min(75, (primaryPx / total) * 100));
+      wrap.querySelector('.split-editor-pane').style.flex  = `0 0 ${pct}%`;
+      wrap.querySelector('.split-preview-pane').style.flex = `0 0 ${100 - pct}%`;
+    }
+
+    // Mouse drag
     divider.addEventListener('mousedown', e => {
-      startX     = e.clientX;
-      startLeftW = wrap.querySelector('.split-editor-pane').offsetWidth;
+      if (isMobileLayout()) return;
+      e.preventDefault();
+      const startX     = e.clientX;
+      const startLeftW = wrap.querySelector('.split-editor-pane').offsetWidth;
       divider.classList.add('dragging');
+      document.body.style.userSelect = 'none';
+      const onMove = e2 => applyRatio(startLeftW + (e2.clientX - startX));
+      const onUp   = ()  => {
+        divider.classList.remove('dragging');
+        document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup',   onUp);
+      };
       document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
+      document.addEventListener('mouseup',   onUp);
     });
-    function onMove(e) {
-      const delta = e.clientX - startX;
-      const total = wrap.offsetWidth;
-      const leftPct = Math.max(25, Math.min(75, ((startLeftW + delta) / total) * 100));
-      wrap.querySelector('.split-editor-pane').style.flex = `0 0 ${leftPct}%`;
-      wrap.querySelector('.split-preview-pane').style.flex = `0 0 ${100 - leftPct}%`;
-    }
-    function onUp() {
-      divider.classList.remove('dragging');
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    }
+
+    // Touch drag
+    divider.addEventListener('touchstart', e => {
+      if (isMobileLayout()) return;
+      const t0     = e.touches[0];
+      const startX = t0.clientX;
+      const startW = wrap.querySelector('.split-editor-pane').offsetWidth;
+      divider.classList.add('dragging');
+      const onMove = e2 => applyRatio(startW + (e2.touches[0].clientX - startX));
+      const onEnd  = ()  => {
+        divider.classList.remove('dragging');
+        divider.removeEventListener('touchmove', onMove);
+        divider.removeEventListener('touchend',  onEnd);
+      };
+      divider.addEventListener('touchmove', onMove, { passive: true });
+      divider.addEventListener('touchend',  onEnd);
+    }, { passive: true });
+
+    // On window resize: clear inline overrides so CSS takes over
+    window.addEventListener('resize', () => {
+      if (!S.splitMode) return;
+      if (isMobileLayout()) {
+        const ep = wrap.querySelector('.split-editor-pane');
+        const pp = wrap.querySelector('.split-preview-pane');
+        if (ep) { ep.style.flex = ''; ep.style.height = ''; }
+        if (pp) { pp.style.flex = ''; pp.style.height = ''; }
+      }
+    });
   }
+
 
   // ══════════════════════════════════════════════════════
   //  IN-DOCUMENT SEARCH (Find bar)
