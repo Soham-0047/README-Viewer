@@ -113,9 +113,31 @@ input, textarea { font-family: var(--font); }
   flex-direction: column;
   flex-shrink: 0;
   z-index: 200;
-  transition: transform var(--t);
+  transition: width var(--t), transform var(--t), opacity var(--t);
   overflow: hidden;
 }
+
+/* ── Collapsible sidebar on all screen sizes ─────────── */
+/* Desktop collapse: slide off-screen by reducing width to 0 */
+body.sidebar-collapsed .sidebar {
+  width: 0;
+  overflow: hidden;
+  border-right: none;
+}
+/* Show a floating re-open indicator on desktop when collapsed */
+body.sidebar-collapsed .main::before {
+  content: '';
+  display: block;
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--accent);
+  opacity: .45;
+  z-index: 10;
+  cursor: pointer;
+  transition: opacity var(--t), width var(--t);
+}
+body.sidebar-collapsed .main::before:hover { width:5px; opacity:.8; }
 
 .sidebar-header {
   display: flex;
@@ -1955,76 +1977,142 @@ input, textarea { font-family: var(--font); }
    SPLIT PANE — desktop side-by-side, mobile stacked
    ════════════════════════════════════════════════════ */
 .split-wrap {
-  flex:1; display:flex; flex-direction:row;
-  min-height:0; overflow:hidden;
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  overflow: hidden;
+  /* fill the entire content-area height */
+  height: 100%;
 }
+
 .split-editor-pane,
 .split-preview-pane {
-  flex:1; display:flex; flex-direction:column;
-  min-width:0; min-height:0; overflow:hidden;
+  flex: 1 1 50%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
+
 .split-pane-label {
-  font-size:9px; font-weight:700; letter-spacing:.12em;
-  text-transform:uppercase; color:var(--txt3);
-  padding:5px 14px 4px;
-  background:var(--bg-surface); border-bottom:1px solid var(--border);
-  flex-shrink:0; display:flex; align-items:center; gap:6px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--txt3);
+  padding: 5px 14px 4px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
 }
+
+/* Editor area inside split fills remaining height */
 .split-editor-pane .editor-area {
-  flex:1; padding:14px 16px; min-height:0;
-  border:none; font-size:13px;
+  flex: 1;
+  height: 0;          /* crucial: forces textarea to respect flex, not expand body */
+  min-height: 0;
+  border: none;
+  resize: none;
+  padding: 14px 18px;
+  font-size: 13px;
+  line-height: 1.7;
+  background: var(--bg);
+  color: var(--txt);
+  font-family: var(--font-mono);
+  outline: none;
+  overflow-y: auto;
 }
+
 .split-preview-pane {
-  border-left:1px solid var(--border);
+  border-left: 1px solid var(--border);
 }
+
 .split-preview-scroll {
-  flex:1; overflow-y:auto; min-height:0;
+  flex: 1;
+  height: 0;          /* same trick: prevents overflow expanding parent */
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
+
 #splitPreviewBody {
-  padding:20px 24px 48px;
-  max-width:100%;
+  padding: 20px 24px 48px;
+  max-width: 100%;
+  /* cap line length so it's readable even at wide split ratio */
+  box-sizing: border-box;
 }
+
+/* Divider — 5px wide with extended hit target */
 .split-divider {
-  width:4px; flex-shrink:0;
-  background:var(--border); cursor:col-resize;
-  transition:background var(--t);
-  position:relative; z-index:10;
-  /* Wider hit-target */
-  margin:0 -2px; padding:0 2px; box-sizing:content-box;
+  width: 5px;
+  flex-shrink: 0;
+  background: var(--border);
+  cursor: col-resize;
+  transition: background 150ms;
+  position: relative;
+  z-index: 10;
+  /* invisible extended hit area */
+  margin: 0 -4px;
+  padding: 0 4px;
+  box-sizing: content-box;
 }
-.split-divider:hover, .split-divider.dragging { background:var(--accent); }
+.split-divider:hover,
+.split-divider.dragging {
+  background: var(--accent);
+}
 
 .btn-pill.split-active {
-  background:var(--accent-dim); color:var(--accent);
-  border-color:rgba(245,166,35,.35);
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: rgba(245,166,35,.35);
 }
 
 /* ── Mobile: stacked vertically ─────────────────────── */
-@media (max-width:640px) {
+@media (max-width: 640px) {
   .split-wrap {
-    flex-direction:column;
+    flex-direction: column;
   }
+
   .split-editor-pane,
   .split-preview-pane {
-    flex:1 1 50% !important;  /* equal halves, override inline styles */
-    min-height:0;
-    width:100% !important;
+    flex: 1 1 50% !important;
+    width: 100% !important;
+    min-height: 0;
+    max-height: 50dvh;
   }
+
   .split-editor-pane {
-    border-bottom:2px solid var(--accent);
-    max-height:50dvh;
+    border-bottom: 2px solid var(--border);
+    border-right: none;
   }
+
   .split-preview-pane {
-    border-left:none;
-    border-top:none;
-    max-height:50dvh;
+    border-left: none;
+    border-top: none;
   }
+
+  /* Horizontal divider on mobile */
   .split-divider {
-    /* Becomes a horizontal handle */
-    width:100% !important; height:4px !important;
-    cursor:row-resize; margin:0; padding:0;
+    width: 100% !important;
+    height: 5px !important;
+    margin: -2px 0 !important;
+    padding: 2px 0 !important;
+    cursor: row-resize;
   }
-  .split-preview-scroll { padding-bottom:calc(var(--bottom-nav-h) + 16px); }
+
+  .split-preview-scroll {
+    padding-bottom: calc(var(--bottom-nav-h) + 20px + env(safe-area-inset-bottom));
+  }
+
+  #splitPreviewBody {
+    padding: 14px 14px 48px;
+  }
 }
 
 /* Starred file indicator */
@@ -2176,4 +2264,13 @@ input, textarea { font-family: var(--font); }
   background:var(--bg-input); border-radius:4px;
   padding:10px 12px; overflow-x:auto; white-space:pre;
   margin-top:6px; line-height:1.6;
+}
+
+/* ── Topbar hamburger: highlight when sidebar is collapsed ── */
+body.sidebar-collapsed .topbar .btn-icon:first-child {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+body.sidebar-collapsed .topbar .btn-icon:first-child:hover {
+  background: rgba(245,166,35,.22);
 }

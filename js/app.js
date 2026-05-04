@@ -304,7 +304,7 @@ const App = (() => {
       item.addEventListener('click', e => {
         if (e.target.closest('.ia-del') || e.target.closest('.ia-edit') || e.target.closest('.file-item-star')) return;
         openFile(id);
-        if (_isMobile()) closeSidebar();
+        closeSidebar();
       });
       item.addEventListener('keydown', e => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openFile(id); }
@@ -375,7 +375,7 @@ const App = (() => {
     _updateBottomNav();
     _updateWordCount();
     el.editorArea.focus();
-    if (_isMobile()) closeSidebar();
+    closeSidebar();
   }
 
   function newFile(starterName = '') {
@@ -399,7 +399,7 @@ const App = (() => {
     el.editorArea.focus();
     const len = el.editorArea.value.length;
     el.editorArea.setSelectionRange(len, len);
-    if (_isMobile()) closeSidebar();
+    closeSidebar();
   }
 
   function saveEditor() {
@@ -471,7 +471,7 @@ const App = (() => {
     el.pdfLoadLabel.textContent   = 'Loading PDF…';
     _showPreviewButtons(false);
     _updateBottomNav();
-    if (_isMobile()) closeSidebar();
+    closeSidebar();
 
     try {
       toast('Rendering PDF…', 'info', 1500);
@@ -816,19 +816,28 @@ const App = (() => {
 
   // ── Sidebar open/close ───────────────────────────────
   function _isMobile() { return window.innerWidth <= 640; }
+  function _sidebarVisible() { return !document.body.classList.contains('sidebar-collapsed'); }
 
   function openSidebar() {
-    el.sidebar.classList.add('open');
-    el.sidebarBackdrop.classList.remove('hidden');
-    el.sidebarBackdrop.classList.add('show');
-    document.body.style.overflow = 'hidden';
+    document.body.classList.remove('sidebar-collapsed');
+    if (_isMobile()) {
+      el.sidebar.classList.add('open');
+      el.sidebarBackdrop.classList.remove('hidden');
+      el.sidebarBackdrop.classList.add('show');
+      document.body.style.overflow = 'hidden';
+    }
   }
+
   function closeSidebar() {
+    document.body.classList.add('sidebar-collapsed');
     el.sidebar.classList.remove('open');
     el.sidebarBackdrop.classList.remove('show');
-    // Re-hide the backdrop so it never sits over content on desktop
     el.sidebarBackdrop.classList.add('hidden');
     document.body.style.overflow = '';
+  }
+
+  function toggleSidebar() {
+    if (_sidebarVisible()) closeSidebar(); else openSidebar();
   }
 
   // ── Bottom nav ────────────────────────────────────────
@@ -1181,11 +1190,7 @@ sequenceDiagram
     if (window.innerWidth <= 640) el.bottomNav.classList.remove('hidden');
 
     // Sidebar toggle
-    el.sidebarOpen.addEventListener('click', () => {
-      if (!_isMobile()) return;  // desktop: sidebar always visible, nothing to do
-      if (el.sidebar.classList.contains('open')) closeSidebar();
-      else openSidebar();
-    });
+    el.sidebarOpen.addEventListener('click', toggleSidebar);
     el.sidebarClose.addEventListener('click', closeSidebar);
     el.sidebarBackdrop.addEventListener('click', closeSidebar);
 
@@ -1559,8 +1564,13 @@ sequenceDiagram
     mqMobile.addEventListener('change', mq => {
       el.bottomNav.classList.toggle('hidden', !mq.matches);
       if (!mq.matches) {
-        // Switched to desktop — always close/cleanup the slide-in state
-        closeSidebar();
+        // Switched to desktop: clean up mobile-specific overlay state
+        el.sidebar.classList.remove('open');
+        el.sidebarBackdrop.classList.remove('show');
+        el.sidebarBackdrop.classList.add('hidden');
+        document.body.style.overflow = '';
+        // But keep sidebar visible (remove collapsed class) on desktop
+        document.body.classList.remove('sidebar-collapsed');
       }
     });
 
@@ -2367,7 +2377,7 @@ sequenceDiagram
     if (!file) return;
 
     // Close sidebar on mobile so it never overlays split view
-    if (_isMobile()) closeSidebar();
+    closeSidebar();
 
     S.splitMode = true;
     S.mode      = 'split';
@@ -2664,7 +2674,7 @@ sequenceDiagram
     // Place cursor at first empty placeholder position
     const pos = el.editorArea.value.indexOf('\n\n') + 2;
     el.editorArea.setSelectionRange(pos, pos);
-    if (_isMobile()) closeSidebar();
+    closeSidebar();
   }
 
   // ══════════════════════════════════════════════════════
