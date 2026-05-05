@@ -249,6 +249,9 @@ const App = (() => {
   }
 
   // ── File list ─────────────────────────────────────────
+  // ── Drag-to-reorder state ────────────────────────────
+  let _dragSrcId = null;
+
   function refreshList() {
     const allFiles = Storage.list(S.searchQ);
     const starred  = _getStarred();
@@ -266,14 +269,15 @@ const App = (() => {
       return;
     }
 
-    // Split starred vs regular (only when not searching)
     const pinnedFiles = !S.searchQ ? allFiles.filter(f => starred.includes(f.id)) : [];
     const normalFiles = !S.searchQ ? allFiles.filter(f => !starred.includes(f.id)) : allFiles;
 
     const renderItem = (f) => `
       <li class="file-item ${f.id === S.activeId ? 'active' : ''}"
           data-id="${_esc(f.id)}" role="option" tabindex="0"
-          aria-selected="${f.id === S.activeId}">
+          aria-selected="${f.id === S.activeId}"
+          draggable="true">
+        <span class="drag-handle" title="Drag to reorder">⠿</span>
         <span class="file-item-icon">${f.id === S.activeId ? '◈' : '◇'}</span>
         <div class="file-item-info">
           <span class="file-item-name" title="${_esc(f.name)}">${_esc(f.name)}</span>
@@ -298,11 +302,11 @@ const App = (() => {
     html += normalFiles.map(renderItem).join('');
     el.fileList.innerHTML = html;
 
-    // Bind events
+    // ── Click / keyboard ──────────────────────────────
     el.fileList.querySelectorAll('.file-item').forEach(item => {
       const id = item.dataset.id;
       item.addEventListener('click', e => {
-        if (e.target.closest('.ia-del') || e.target.closest('.ia-edit') || e.target.closest('.file-item-star')) return;
+        if (e.target.closest('.ia-del,.ia-edit,.file-item-star,.drag-handle')) return;
         openFile(id);
         closeSidebar();
       });
@@ -310,54 +314,98 @@ const App = (() => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openFile(id); }
       });
     });
-    el.fileList.querySelectorAll('.ia-edit').forEach(btn => {
-      btn.addEventListener('click', e => { e.stopPropagation(); editFile(btn.dataset.id); });
-    });
-    el.fileList.querySelectorAll('.ia-del').forEach(btn => {
-      btn.addEventListener('click', e => { e.stopPropagation(); deleteFile(btn.dataset.id); });
-    });
-    el.fileList.querySelectorAll('.file-item-star').forEach(btn => {
-      btn.addEventListener('click', e => { e.stopPropagation(); _toggleStar(btn.dataset.id); });
-    });
+    el.fileList.querySelectorAll('.ia-edit').forEach(btn =>
+      btn.addEventListener('click', e => { e.stopPropagation(); editFile(btn.dataset.id); }));
+    el.fileList.querySelectorAll('.ia-del').forEach(btn =>
+      btn.addEventListener('click', e => { e.stopPropagation(); deleteFile(btn.dataset.id); }));
+    el.fileList.querySelectorAll('.file-item-star').forEach(btn =>
+      btn.addEventListener('click', e => { e.stopPropagation(); _toggleStar(btn.dataset.id); }));
+
+    // ── Drag-to-reorder ───────────────────────────────
+    // Only active when not searching (order is meaningful)
+    if (!S.searchQ) _bindDragReorder(el.fileList);
   }
 
-  // ── Open file (preview mode) ──────────────────────────
-  async function openFile(id) {
-    const file = Storage.load(id);
-    if (!file) { toast('File not found', 'error'); return; }
-    S.activeId = id;
-    S.mode     = 'preview';
-    refreshList();
-    setMode('preview');
-    el.topbarTitle.textContent = file.name;
-    el.previewMeta.innerHTML = [
-      Storage.formatDate(file.updatedAt),
-      `${file.lines ?? '?'} lines`,
-      `${file.words ?? '?'} words`,
-      file.sizeLabel || Storage.formatSize(file.bytes),
-    ].map(s => `<span>${s}</span>`).join('');
-    _showPreviewButtons(true);
-    _updateBottomNav();
-    Storage.setPref('lastOpenId', id);
-    await _renderFile(file);
-    // Attach reading progress (restores scroll + tracks position)
-    if (el.previewScroll) ReadingProgress.attach(el.previewScroll, id);
-  }
+  function _bindDragReorder(list) {
+    const items = list.querySelectorAll('.file-item[draggable]');
+    let _dragOver = null;
 
-  async function _renderFile(file) {
-    if (S.rendering) return;
-    S.rendering = true;
-    el.markdownBody.innerHTML = '<div style="padding:32px;color:var(--txt3);font-size:13px;font-family:var(--font-mono)">Rendering…</div>';
-    try {
-      S.tocItems = await Renderer.render(file.content, el.markdownBody, S.isDark);
-      Renderer.renderTOC(S.tocItems, el.tocContent);
-      // Show TOC button only if there are headings
-      el.tocBtn.classList.toggle('hidden', S.tocItems.length < 2);
-    } catch(e) {
-      el.markdownBody.innerHTML = `<div style="padding:32px;color:var(--danger);font-size:13px">Render error: ${_esc(e.message)}</div>`;
-    } finally {
-      S.rendering = false;
-    }
+    items.forEach(item => {
+      // ── Drag start ──────────────────────────────────
+      item.addEventListener('dragstart', e => {
+        _dragSrcId = item.dataset.id;
+        item.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', _dragSrcId);
+        // Slight delay so the drag image captures normal style
+        setTimeout(() => item.classList.add('drag-ghost'), 0);
+      });
+
+      // ── Drag over ───────────────────────────────────
+      item.addEventListener('dragover', e => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (item.dataset.id === _dragSrcId) return;
+
+        // Remove indicator from previous target
+        if (_dragOver && _dragOver !== item) {
+          _dragOver.classList.remove('drag-over-above', 'drag-over-below');
+        }
+        _dragOver = item;
+
+        // Determine above/below by cursor Y vs item midpoint
+        const rect = item.getBoundingClientRect();
+        const mid  = rect.top + rect.height / 2;
+        if (e.clientY < mid) {
+          item.classList.add('drag-over-above');
+          item.classList.remove('drag-over-below');
+        } else {
+          item.classList.add('drag-over-below');
+          item.classList.remove('drag-over-above');
+        }
+      });
+
+      item.addEventListener('dragleave', e => {
+        if (!item.contains(e.relatedTarget)) {
+          item.classList.remove('drag-over-above', 'drag-over-below');
+        }
+      });
+
+      // ── Drop ────────────────────────────────────────
+      item.addEventListener('drop', e => {
+        e.preventDefault();
+        item.classList.remove('drag-over-above', 'drag-over-below');
+        const srcId  = _dragSrcId;
+        const dstId  = item.dataset.id;
+        if (!srcId || srcId === dstId) return;
+
+        // Build new order from current DOM
+        const allItems  = [...list.querySelectorAll('.file-item[data-id]')];
+        let   orderedIds = allItems.map(i => i.dataset.id);
+
+        // Remove src from current position
+        orderedIds = orderedIds.filter(id => id !== srcId);
+
+        // Insert before or after dst
+        const dstIdx = orderedIds.indexOf(dstId);
+        const rect   = item.getBoundingClientRect();
+        const insertBefore = e.clientY < rect.top + rect.height / 2;
+        const insertAt = insertBefore ? dstIdx : dstIdx + 1;
+        orderedIds.splice(insertAt, 0, srcId);
+
+        Storage.reorderFiles(orderedIds);
+        refreshList();
+      });
+
+      // ── Drag end ─────────────────────────────────────
+      item.addEventListener('dragend', () => {
+        item.classList.remove('dragging', 'drag-ghost');
+        list.querySelectorAll('.drag-over-above,.drag-over-below,.dragging,.drag-ghost')
+          .forEach(el => el.classList.remove('drag-over-above','drag-over-below','dragging','drag-ghost'));
+        _dragSrcId = null;
+        _dragOver  = null;
+      });
+    });
   }
 
   // ── Edit file ─────────────────────────────────────────

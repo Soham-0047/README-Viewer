@@ -1,362 +1,316 @@
 /**
- * MarkVault v2 — Storage Service
- * Dual-layer: localStorage (instant) + Firebase Firestore (cross-device sync)
+ * MarkVault v2 — Storage + Auth Service
  *
  * Architecture:
- *   - ALL writes go to localStorage FIRST for instant feedback
- *   - If Firebase is connected, writes also go to Firestore
- *   - On connect, Firestore data is merged with local data (latest-wins per file)
- *   - Real-time listener keeps all tabs/devices in sync automatically
+ *   localStorage  → always-on, instant, works offline
+ *   Firestore     → cross-device sync, keyed per authenticated user
+ *
+ * Firestore paths:
+ *   users/{uid}/files/{fileId}   ← private per-user files
+ *   mv_shared_links/{token}      ← public share tokens (readable without auth)
+ *
+ * Auth flow:
+ *   1. Firebase is configured (connectFirebase)
+ *   2. User signs in with Google  →  uid = "abc123"
+ *   3. All Firestore ops use:  users/abc123/files/...
+ *   4. Same Google on phone/laptop/tablet → same uid → same files
+ *   5. signOut() → uid cleared → local-only mode
  */
 
 const Storage = (() => {
-  // ── Keys ──────────────────────────────────────────────
+
   const PREFIX   = 'MV2_file_';
   const IDX_KEY  = 'MV2_index';
   const PREF_KEY = 'MV2_prefs';
   const FB_KEY   = 'MV2_firebase_config';
-  const COLL     = 'markvault_files';  // Firestore collection
 
-  // ── Firebase state ────────────────────────────────────
-  let _db           = null;   // Firestore instance
-  let _fbApp        = null;   // Firebase app instance
-  let _unsubscribe  = null;   // Firestore real-time listener cleanup
-  let _syncStatus   = 'local'; // 'local' | 'connecting' | 'synced' | 'error'
-  let _onStatusChange = null; // callback(status, label)
-  let _onRemoteChange = null; // callback() — called when remote data arrives
+  let _db         = null;
+  let _auth       = null;
+  let _fbApp      = null;
+  let _user       = null;
+  let _unsubFile  = null;
+  let _unsubAuth  = null;
+  let _syncStatus = 'local';
 
-  // ── Helpers ───────────────────────────────────────────
-  function _uid() {
-    return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  }
-  function _now() { return new Date().toISOString(); }
-  function _fmtSize(bytes) {
-    if (!bytes) return '0 B';
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1048576) return `${(bytes/1024).toFixed(1)} KB`;
-    return `${(bytes/1048576).toFixed(2)} MB`;
+  let _onStatusChange = null;
+  let _onRemoteChange = null;
+  let _onAuthChange   = null;
+
+  // ── Helpers ──────────────────────────────────────────
+  function _uid()      { return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
+  function _now()      { return new Date().toISOString(); }
+  function _fmtSize(b) {
+    if (!b) return '0 B';
+    if (b < 1024)    return `${b} B`;
+    if (b < 1048576) return `${(b/1024).toFixed(1)} KB`;
+    return `${(b/1048576).toFixed(2)} MB`;
   }
   function _fmtDate(iso) {
     if (!iso) return '';
-    const d = new Date(iso);
-    return d.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+    return new Date(iso).toLocaleDateString('en-US',{ month:'short',day:'numeric',year:'numeric' });
   }
 
-  // ── Index (local) ─────────────────────────────────────
-  function _getIdx() {
-    try { return JSON.parse(localStorage.getItem(IDX_KEY) || '[]'); }
-    catch { return []; }
-  }
-  function _saveIdx(idx) {
-    localStorage.setItem(IDX_KEY, JSON.stringify(idx));
-  }
-  function _upsertIdx(meta) {
-    const idx = _getIdx();
-    const i   = idx.findIndex(x => x.id === meta.id);
-    if (i >= 0) idx[i] = meta; else idx.unshift(meta);
-    _saveIdx(idx);
-  }
-  function _removeFromIdx(id) {
-    _saveIdx(_getIdx().filter(x => x.id !== id));
+  // Firestore collection scoped to signed-in user
+  function _userColl() {
+    if (!_db || !_user) return null;
+    return _db.collection('users').doc(_user.uid).collection('files');
   }
 
-  // ── Build file object ─────────────────────────────────
-  function _buildFile(id, name, content, existingCreatedAt = null) {
+  // ── localStorage ─────────────────────────────────────
+  function _getIdx()       { try { return JSON.parse(localStorage.getItem(IDX_KEY)||'[]'); } catch { return []; } }
+  function _saveIdx(idx)   { localStorage.setItem(IDX_KEY, JSON.stringify(idx)); }
+  function _upsertIdx(m)   { const idx=_getIdx(), i=idx.findIndex(x=>x.id===m.id); if(i>=0) idx[i]=m; else idx.unshift(m); _saveIdx(idx); }
+  function _removeIdx(id)  { _saveIdx(_getIdx().filter(x=>x.id!==id)); }
+
+  function _build(id, name, content, createdAt=null) {
     const bytes = new TextEncoder().encode(content).length;
-    const lines = content.split('\n').length;
-    const words = content.trim() ? content.trim().split(/\s+/).length : 0;
     const now   = _now();
     return {
-      id, name, content, bytes, lines, words,
-      createdAt: existingCreatedAt || now,
+      id, name, content, bytes,
+      lines:     content.split('\n').length,
+      words:     content.trim() ? content.trim().split(/\s+/).length : 0,
+      createdAt: createdAt || now,
       updatedAt: now,
       sizeLabel: _fmtSize(bytes),
     };
   }
 
-  // ── CRUD: Local ───────────────────────────────────────
   function _localSave(file) {
-    localStorage.setItem(PREFIX + file.id, JSON.stringify(file));
-    const { content:_, ...meta } = file; // strip content from index
+    localStorage.setItem(PREFIX+file.id, JSON.stringify(file));
+    const { content:_, ...meta } = file;
     _upsertIdx(meta);
   }
-  function _localLoad(id) {
-    try { return JSON.parse(localStorage.getItem(PREFIX + id) || 'null'); }
-    catch { return null; }
-  }
-  function _localDel(id) {
-    localStorage.removeItem(PREFIX + id);
-    _removeFromIdx(id);
-  }
+  function _localLoad(id) { try { return JSON.parse(localStorage.getItem(PREFIX+id)||'null'); } catch { return null; } }
+  function _localDel(id)  { localStorage.removeItem(PREFIX+id); _removeIdx(id); }
 
-  // ── CRUD: Firebase ────────────────────────────────────
+  // ── Firestore ─────────────────────────────────────────
   async function _fbSave(file) {
-    if (!_db) return;
-    try {
-      const { content, ...meta } = file;
-      // Store content separately to avoid 1MB doc limit edge cases
-      await _db.collection(COLL).doc(file.id).set({
-        ...meta, content, _v: 2
-      });
-    } catch(e) {
-      console.warn('[MV] Firestore write failed:', e.message);
-    }
+    const c = _userColl(); if (!c) return;
+    try { await c.doc(file.id).set(file); } catch(e) { console.warn('[MV]',e.message); }
   }
   async function _fbDel(id) {
-    if (!_db) return;
-    try { await _db.collection(COLL).doc(id).delete(); }
-    catch(e) { console.warn('[MV] Firestore delete failed:', e.message); }
+    const c = _userColl(); if (!c) return;
+    try { await c.doc(id).delete(); } catch(e) { console.warn('[MV]',e.message); }
   }
   async function _fbDelAll() {
-    if (!_db) return;
+    const c = _userColl(); if (!c) return;
     try {
-      const snap = await _db.collection(COLL).get();
-      const batch = _db.batch();
-      snap.docs.forEach(d => batch.delete(d.ref));
+      const snap=await c.get(), batch=_db.batch();
+      snap.docs.forEach(d=>batch.delete(d.ref));
       await batch.commit();
-    } catch(e) { console.warn('[MV] Firestore delete-all failed:', e.message); }
+    } catch(e) { console.warn('[MV]',e.message); }
   }
 
-  // ── Sync status ───────────────────────────────────────
   function _setStatus(status, label) {
     _syncStatus = status;
     if (_onStatusChange) _onStatusChange(status, label);
   }
 
-  // ── Real-time listener ────────────────────────────────
-  function _startListener() {
-    if (!_db) return;
-    if (_unsubscribe) _unsubscribe();
-
-    _unsubscribe = _db.collection(COLL).onSnapshot(snapshot => {
-      if (snapshot.metadata.hasPendingWrites) return; // skip local echoes
+  function _startFileListener() {
+    if (_unsubFile) { _unsubFile(); _unsubFile=null; }
+    const c = _userColl(); if (!c) return;
+    _unsubFile = c.onSnapshot(snap => {
+      if (snap.metadata.hasPendingWrites) return;
       let changed = false;
-
-      snapshot.docChanges().forEach(change => {
-        const data = change.doc.data();
-        if (!data.id || !data.name) return;
-
-        if (change.type === 'added' || change.type === 'modified') {
-          const local = _localLoad(data.id);
-          // Latest wins: use whichever was updated more recently
-          if (!local || data.updatedAt > local.updatedAt) {
-            _localSave({ ...data, sizeLabel: _fmtSize(data.bytes) });
-            changed = true;
-          }
-        } else if (change.type === 'removed') {
-          _localDel(data.id);
-          changed = true;
-        }
+      snap.docChanges().forEach(ch => {
+        const d = ch.doc.data();
+        if (!d.id||!d.name) return;
+        if (ch.type==='added'||ch.type==='modified') {
+          const loc = _localLoad(d.id);
+          if (!loc || d.updatedAt > loc.updatedAt) { _localSave({...d,sizeLabel:_fmtSize(d.bytes)}); changed=true; }
+        } else if (ch.type==='removed') { _localDel(d.id); changed=true; }
       });
-
-      if (changed) {
-        _setStatus('synced', 'synced');
-        if (_onRemoteChange) _onRemoteChange();
-      }
-    }, err => {
-      console.warn('[MV] Firestore listener error:', err.message);
-      _setStatus('error', 'error');
-    });
+      if (changed) { _setStatus('synced','synced'); if (_onRemoteChange) _onRemoteChange(); }
+    }, err => { console.warn('[MV] listener:',err.message); _setStatus('error','error'); });
   }
 
-  // ── Firebase connect ──────────────────────────────────
-  async function connectFirebase(configJson) {
-    // Parse config
-    let cfg;
-    try {
-      const clean = configJson
-        .replace(/\/\/.*$/gm, '')   // strip JS comments
-        .replace(/,\s*([}\]])/g, '$1'); // trailing commas
-      cfg = JSON.parse(clean);
-    } catch {
-      throw new Error('Invalid JSON — check for typos or missing quotes.');
-    }
-
-    const required = ['apiKey','authDomain','projectId'];
-    const missing  = required.filter(k => !cfg[k]);
-    if (missing.length) throw new Error(`Missing fields: ${missing.join(', ')}`);
-
-    // Tear down existing connection
-    await disconnectFirebase(false);
-
-    _setStatus('connecting', 'connecting…');
-
-    try {
-      // Init Firebase (handle already-initialized case)
-      if (firebase.apps.length > 0) {
-        _fbApp = firebase.apps[0];
-        // Re-initialize with new config if projectId changed
-        if (_fbApp.options.projectId !== cfg.projectId) {
-          await _fbApp.delete();
-          _fbApp = firebase.initializeApp(cfg, 'markvault');
-        }
-      } else {
-        _fbApp = firebase.initializeApp(cfg, 'markvault');
-      }
-
-      _db = _fbApp.firestore();
-
-      // Test connection with a lightweight read
-      await _db.collection(COLL).limit(1).get();
-
-      // Push all local files to Firestore (merge, local wins if newer)
-      await _pushLocalToCloud();
-
-      // Start real-time listener
-      _startListener();
-
-      // Persist config
-      localStorage.setItem(FB_KEY, JSON.stringify(cfg));
-      _setStatus('synced', 'synced');
-      return true;
-    } catch(e) {
-      _db    = null;
-      _fbApp = null;
-      _setStatus('error', 'error');
-      throw e;
-    }
-  }
-
-  async function disconnectFirebase(clearConfig = true) {
-    if (_unsubscribe) { _unsubscribe(); _unsubscribe = null; }
-    if (_fbApp) {
-      try { await _fbApp.delete(); } catch {}
-      _fbApp = null;
-    }
-    _db = null;
-    if (clearConfig) localStorage.removeItem(FB_KEY);
-    _setStatus('local', 'local');
-  }
-
-  // Push all local files up to Firestore (on initial connect)
   async function _pushLocalToCloud() {
-    if (!_db) return;
-    const idx = _getIdx();
-    for (const meta of idx) {
-      const file = _localLoad(meta.id);
-      if (!file) continue;
+    const c = _userColl(); if (!c) return;
+    for (const meta of _getIdx()) {
+      const file = _localLoad(meta.id); if (!file) continue;
       try {
-        // Check if remote copy is newer; if so, skip push
-        const doc = await _db.collection(COLL).doc(file.id).get();
-        if (doc.exists && doc.data().updatedAt > file.updatedAt) {
-          // Remote is newer → pull it down
-          _localSave({ ...doc.data(), sizeLabel: _fmtSize(doc.data().bytes) });
-        } else {
-          // Local is newer → push up
-          await _fbSave(file);
-        }
+        const doc = await c.doc(file.id).get();
+        if (doc.exists && doc.data().updatedAt > file.updatedAt)
+          _localSave({...doc.data(), sizeLabel:_fmtSize(doc.data().bytes)});
+        else await _fbSave(file);
       } catch {}
     }
   }
 
-  // Auto-reconnect on load if config exists
-  async function autoConnect() {
-    const raw = localStorage.getItem(FB_KEY);
-    if (!raw) return false;
+  // ── Firebase connect ──────────────────────────────────
+  async function connectFirebase(configJson) {
+    let cfg;
+    try { cfg = JSON.parse(configJson.replace(/\/\/.*$/gm,'').replace(/,\s*([}\]])/g,'$1')); }
+    catch { throw new Error('Invalid JSON — check for typos.'); }
+    const missing = ['apiKey','authDomain','projectId'].filter(k=>!cfg[k]);
+    if (missing.length) throw new Error(`Missing fields: ${missing.join(', ')}`);
+
+    await disconnectFirebase(false);
+    _setStatus('connecting','connecting…');
+
     try {
-      await connectFirebase(raw);
+      const existing = firebase.apps.find(a=>a.name==='markvault');
+      if (existing && existing.options.projectId!==cfg.projectId) await existing.delete();
+      _fbApp = firebase.apps.find(a=>a.name==='markvault') || firebase.initializeApp(cfg,'markvault');
+      _db    = _fbApp.firestore();
+      _auth  = _fbApp.auth();
+
+      // Test connectivity
+      await _db.collection('_ping').limit(1).get().catch(()=>{});
+
+      // Auth state listener — fires immediately with current user
+      _unsubAuth = _auth.onAuthStateChanged(async user => {
+        _user = user;
+        if (user) {
+          _setStatus('synced','synced');
+          await _pushLocalToCloud();
+          _startFileListener();
+        } else {
+          if (_unsubFile) { _unsubFile(); _unsubFile=null; }
+          _setStatus('connected','no account');
+        }
+        if (_onAuthChange) _onAuthChange(user);
+      });
+
+      localStorage.setItem(FB_KEY, JSON.stringify(cfg));
+      _setStatus('connected','connected');
       return true;
     } catch(e) {
-      console.warn('[MV] Auto-connect failed:', e.message);
-      _setStatus('error', 'disconnected');
-      return false;
+      _db=null; _auth=null; _fbApp=null;
+      _setStatus('error','error');
+      throw e;
     }
   }
 
-  function getSavedConfig() {
-    try { return localStorage.getItem(FB_KEY) || ''; }
-    catch { return ''; }
+  async function disconnectFirebase(clearConfig=true) {
+    if (_unsubFile) { _unsubFile(); _unsubFile=null; }
+    if (_unsubAuth) { _unsubAuth(); _unsubAuth=null; }
+    if (_fbApp)     { try { await _fbApp.delete(); } catch {} _fbApp=null; }
+    _db=null; _auth=null; _user=null;
+    if (clearConfig) localStorage.removeItem(FB_KEY);
+    _setStatus('local','local');
   }
 
-  function isConnected() { return !!_db; }
-  function getSyncStatus() { return _syncStatus; }
+  async function autoConnect() {
+    const raw = localStorage.getItem(FB_KEY);
+    if (!raw) return false;
+    try { await connectFirebase(raw); return true; }
+    catch(e) { console.warn('[MV] auto-connect:',e.message); _setStatus('error','disconnected'); return false; }
+  }
+
+  // ── Auth ─────────────────────────────────────────────
+  async function signInWithGoogle() {
+    if (!_auth) throw new Error('Set up Firebase first (☁ icon in sidebar).');
+    const provider = new firebase.auth.GoogleAuthProvider();
+    provider.addScope('email'); provider.addScope('profile');
+    try {
+      const result = await _auth.signInWithPopup(provider);
+      return result.user;
+    } catch(e) {
+      // Popup blocked (common on mobile) → redirect flow
+      if (['auth/popup-blocked','auth/popup-closed-by-user','auth/cancelled-popup-request'].includes(e.code)) {
+        await _auth.signInWithRedirect(provider);
+        return null;
+      }
+      throw e;
+    }
+  }
+
+  async function handleRedirectResult() {
+    if (!_auth) return null;
+    try { const r = await _auth.getRedirectResult(); return r?.user || null; }
+    catch { return null; }
+  }
+
+  async function signOut() {
+    if (_unsubFile) { _unsubFile(); _unsubFile=null; }
+    if (_auth) await _auth.signOut();
+    _user = null;
+    _setStatus(_db ? 'connected':'local', _db ? 'no account':'local');
+    if (_onAuthChange) _onAuthChange(null);
+  }
+
+  function getCurrentUser() { return _user; }
+  function isSignedIn()     { return !!_user; }
+  function isConnected()    { return !!_db; }
+  function getSyncStatus()  { return _syncStatus; }
+  function getSavedConfig() { try { return localStorage.getItem(FB_KEY)||''; } catch { return ''; } }
+  function getDB()          { return _db; }
+  function getAuth()        { return _auth; }
+
+  async function forcSync() {
+    if (!_db||!_user) return false;
+    _setStatus('syncing','syncing…');
+    await _pushLocalToCloud();
+    _setStatus('synced','synced');
+    return true;
+  }
 
   // ── Public CRUD ───────────────────────────────────────
-  function save(name, content, existingId = null) {
-    const id    = existingId || _uid();
-    const old   = existingId ? _localLoad(existingId) : null;
-    const file  = _buildFile(id, name, content, old?.createdAt || null);
+  function save(name, content, existingId=null) {
+    const id   = existingId || _uid();
+    const old  = existingId ? _localLoad(existingId) : null;
+    const file = _build(id, name, content, old?.createdAt);
     _localSave(file);
-    if (_db) _fbSave(file).catch(() => {});
+    if (_db && _user) _fbSave(file).catch(()=>{});
     return file;
   }
+  function load(id)    { return _localLoad(id); }
+  function remove(id)  { _localDel(id); if (_db&&_user) _fbDel(id).catch(()=>{}); }
+  function removeAll() { _getIdx().forEach(m=>localStorage.removeItem(PREFIX+m.id)); localStorage.removeItem(IDX_KEY); if (_db&&_user) _fbDelAll().catch(()=>{}); }
 
-  function load(id) { return _localLoad(id); }
-
-  function remove(id) {
-    _localDel(id);
-    if (_db) _fbDel(id).catch(() => {});
-  }
-
-  function removeAll() {
-    const idx = _getIdx();
-    idx.forEach(m => localStorage.removeItem(PREFIX + m.id));
-    localStorage.removeItem(IDX_KEY);
-    if (_db) _fbDelAll().catch(() => {});
-  }
-
-  function list(query = '') {
+  function list(query='') {
     const idx = _getIdx();
     if (!query.trim()) return idx;
     const q = query.toLowerCase();
-    return idx.filter(m => m.name.toLowerCase().includes(q));
+    return idx.filter(m=>m.name.toLowerCase().includes(q));
   }
 
   function searchContent(query) {
     if (!query.trim()) return [];
-    const q  = query.toLowerCase();
-    const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'), 'gi');
+    const q=query.toLowerCase(), re=new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi');
     return _getIdx()
       .map(meta => {
-        const file = _localLoad(meta.id);
-        if (!file) return null;
-        const nameHit    = file.name.toLowerCase().includes(q);
-        const matches    = (file.content.match(re) || []).length;
-        if (!nameHit && !matches) return null;
-        return { ...meta, matches, nameHit };
+        const file=_localLoad(meta.id); if (!file) return null;
+        const nameHit=file.name.toLowerCase().includes(q), matches=(file.content.match(re)||[]).length;
+        if (!nameHit&&!matches) return null;
+        return {...meta, matches, nameHit};
       })
-      .filter(Boolean)
-      .sort((a,b) => (b.nameHit - a.nameHit) || (b.matches - a.matches));
+      .filter(Boolean).sort((a,b)=>(b.nameHit-a.nameHit)||(b.matches-a.matches));
   }
 
-  // ── Force sync (push all local to Firestore) ──────────
-  async function forcSync() {
-    if (!_db) return false;
-    _setStatus('syncing', 'syncing…');
-    await _pushLocalToCloud();
-    _setStatus('synced', 'synced');
-    return true;
+  function reorderFiles(orderedIds) {
+    // orderedIds: array of file ids in the new desired order
+    const idx = _getIdx();
+    const map = new Map(idx.map(m => [m.id, m]));
+    // Build new index: ordered ids first, then any not in the list
+    const reordered = [
+      ...orderedIds.map(id => map.get(id)).filter(Boolean),
+      ...idx.filter(m => !orderedIds.includes(m.id)),
+    ];
+    _saveIdx(reordered);
   }
 
-  // ── Preferences ───────────────────────────────────────
-  function getPrefs()          { try { return JSON.parse(localStorage.getItem(PREF_KEY)||'{}'); } catch { return {}; } }
-  function setPref(k,v)        { const p=getPrefs(); p[k]=v; localStorage.setItem(PREF_KEY,JSON.stringify(p)); }
-
-  // ── Stats ─────────────────────────────────────────────
+  function getPrefs()    { try { return JSON.parse(localStorage.getItem(PREF_KEY)||'{}'); } catch { return {}; } }
+  function setPref(k,v)  { const p=getPrefs(); p[k]=v; localStorage.setItem(PREF_KEY,JSON.stringify(p)); }
   function stats() {
-    const idx   = _getIdx();
-    const total = idx.reduce((s,m) => s+(m.bytes||0), 0);
+    const idx=_getIdx(), total=idx.reduce((s,m)=>s+(m.bytes||0),0);
     return { count:idx.length, totalBytes:total, label:`${idx.length} file${idx.length!==1?'s':''} · ${_fmtSize(total)}` };
   }
+  function formatDate(iso) { return _fmtDate(iso); }
+  function formatSize(b)   { return _fmtSize(b); }
 
-  function formatDate(iso)    { return _fmtDate(iso); }
-  function formatSize(bytes)  { return _fmtSize(bytes); }
-
-  // ── Event hooks ───────────────────────────────────────
-  function onStatusChange(cb)  { _onStatusChange = cb; }
-  function onRemoteChange(cb)  { _onRemoteChange = cb; }
-
-  function getDB() { return _db; }
+  function onStatusChange(cb) { _onStatusChange=cb; }
+  function onRemoteChange(cb) { _onRemoteChange=cb; }
+  function onAuthChange(cb)   { _onAuthChange=cb; }
 
   return {
-    // CRUD
-    save, load, remove, removeAll, list, searchContent,
-    // Firebase
-    connectFirebase, disconnectFirebase, autoConnect,
-    isConnected, getSyncStatus, getSavedConfig, forcSync, getDB,
-    // Prefs & utils
+    save, load, remove, removeAll, list, searchContent, reorderFiles,
+    connectFirebase, disconnectFirebase, autoConnect, forcSync,
+    signInWithGoogle, handleRedirectResult, signOut,
+    getCurrentUser, isSignedIn, isConnected, getSyncStatus,
+    getSavedConfig, getDB, getAuth,
     getPrefs, setPref, stats, formatDate, formatSize,
-    // Hooks
-    onStatusChange, onRemoteChange,
+    onStatusChange, onRemoteChange, onAuthChange,
   };
 })();

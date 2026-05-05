@@ -2274,3 +2274,48 @@ body.sidebar-collapsed .topbar .btn-icon:first-child {
 body.sidebar-collapsed .topbar .btn-icon:first-child:hover {
   background: rgba(245,166,35,.22);
 }
+
+/* ════════════════════════════════════════════════════
+   FILE LIST — DRAG TO REORDER
+   ════════════════════════════════════════════════════ */
+
+/* Drag handle — visible on hover */
+.drag-handle {
+  font-size: 12px;
+  color: var(--txt3);
+  cursor: grab;
+  flex-shrink: 0;
+  padding: 0 2px;
+  opacity: 0;
+  transition: opacity var(--t);
+  line-height: 1;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.file-item:hover .drag-handle  { opacity: 1; }
+.drag-handle:active             { cursor: grabbing; }
+
+/* The item being dragged */
+.file-item.dragging {
+  opacity: 0.4;
+}
+/* The ghost copy following cursor */
+.file-item.drag-ghost {
+  opacity: 0.4;
+  background: var(--bg-active);
+}
+
+/* Drop position indicators */
+.file-item.drag-over-above {
+  box-shadow: 0 -2px 0 0 var(--accent);
+}
+.file-item.drag-over-below {
+  box-shadow: 0 2px 0 0 var(--accent);
+}
+
+/* Touch devices: hold to drag hint */
+@media (hover: none) {
+  .drag-handle {
+    opacity: 0.45;  /* always visible on touch */
+  }
+}
