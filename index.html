@@ -617,11 +617,18 @@ service cloud.firestore {
 
 <!-- Manage links modal -->
 <div class="modal-overlay hidden" id="manageLinksModal">
-  <div class="modal modal-wide">
-    <h3 class="modal-title">Shared Links</h3>
-    <div class="managed-links-list" id="managedLinksList">
-      <p style="color:var(--txt3);font-size:13px;text-align:center;padding:20px">Loading…</p>
+  <div class="modal modal-analytics">
+    <div class="modal-title-row">
+      <h3 class="modal-title">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:6px"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Share Analytics
+      </h3>
+      <button class="al-refresh-btn" id="analyticsRefresh" title="Refresh">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+        Refresh
+      </button>
     </div>
+    <div class="managed-links-list" id="managedLinksList"></div>
     <div class="modal-footer">
       <button class="btn-sm-ghost" id="manageLinksClose">Close</button>
     </div>
@@ -920,12 +927,12 @@ service cloud.firestore {
   </button>
 </div>
 
-<script src="js/storage.js?v=4"></script>
-<script src="js/renderer.js?v=4"></script>
-<script src="js/sharing.js?v=4"></script>
-<script src="js/ai.js?v=4"></script>
-<script src="js/templates.js?v=4"></script>
-<script src="js/pdfhandler.js?v=4"></script>
-<script src="js/app.js?v=4"></script>
+<script src="js/storage.js?v=5"></script>
+<script src="js/renderer.js?v=5"></script>
+<script src="js/sharing.js?v=5"></script>
+<script src="js/ai.js?v=5"></script>
+<script src="js/templates.js?v=5"></script>
+<script src="js/pdfhandler.js?v=5"></script>
+<script src="js/app.js?v=5"></script>
 </body>
 </html>

@@ -1458,6 +1458,7 @@ sequenceDiagram
     el.shareQRBtn?.addEventListener('click', _toggleQR);
     el.shareManageBtn?.addEventListener('click', _openManageLinks);
     el.manageLinksClose?.addEventListener('click', () => el.manageLinksModal?.classList.add('hidden'));
+    document.getElementById('analyticsRefresh')?.addEventListener('click', _openManageLinks);
     el.manageLinksModal?.addEventListener('click', e => { if (e.target === el.manageLinksModal) el.manageLinksModal.classList.add('hidden'); });
 
     // ── Focus mode ─────────────────────────────────────
@@ -1685,7 +1686,7 @@ sequenceDiagram
 
     // Handle ?share=TOKEN (works without auth)
     if (SharedViewer.isSharedView()) {
-      await SharedViewer.init(Storage.getDB());
+      await SharedViewer.init();  // uses REST API — no SDK/auth needed
       return;
     }
 
@@ -2004,46 +2005,114 @@ sequenceDiagram
     el.manageLinksModal?.classList.remove('hidden');
     const listEl = el.managedLinksList;
     if (!listEl) return;
-    listEl.innerHTML = '<p style="color:var(--txt3);font-size:13px;text-align:center;padding:20px">Loading…</p>';
+
+    listEl.innerHTML = `<div class="analytics-loading">
+      <div class="pdf-spinner" style="width:24px;height:24px;border-width:2px"></div>
+      Loading analytics…
+    </div>`;
 
     if (!db) {
-      listEl.innerHTML = '<p style="color:var(--txt3);font-size:13px;text-align:center;padding:20px">Firebase not connected.</p>';
+      listEl.innerHTML = '<p style="color:var(--txt3);font-size:13px;text-align:center;padding:20px">Connect Firebase to see analytics.</p>';
       return;
     }
+
     try {
-      const links = await Sharing.listLinks(db);
+      const { links, totalViews, totalUnique, activeLinks, topLink } =
+        await Sharing.getAnalytics(db);
+
+      // ── Summary cards ────────────────────────────────
+      const summaryHTML = `
+        <div class="analytics-summary">
+          <div class="analytics-card">
+            <div class="analytics-card-val">${totalViews}</div>
+            <div class="analytics-card-label">Total views</div>
+          </div>
+          <div class="analytics-card">
+            <div class="analytics-card-val">${totalUnique}</div>
+            <div class="analytics-card-label">Unique viewers</div>
+          </div>
+          <div class="analytics-card">
+            <div class="analytics-card-val">${activeLinks}</div>
+            <div class="analytics-card-label">Active links</div>
+          </div>
+          <div class="analytics-card">
+            <div class="analytics-card-val">${links.length}</div>
+            <div class="analytics-card-label">Total links</div>
+          </div>
+        </div>
+        ${topLink ? `<div class="analytics-top">
+          🏆 Most viewed: <strong>${_esc(topLink.title)}</strong> — ${topLink.views || 0} views
+        </div>` : ''}`;
+
       if (!links.length) {
-        listEl.innerHTML = '<p style="color:var(--txt3);font-size:13px;text-align:center;padding:20px">No shared links yet.</p>';
+        listEl.innerHTML = summaryHTML +
+          '<p style="color:var(--txt3);font-size:13px;text-align:center;padding:20px">No shared links yet.</p>';
         return;
       }
-      listEl.innerHTML = links.map(l => `
-        <div class="managed-link-row ${!l.active ? 'revoked' : ''}">
-          <div class="managed-link-info">
-            <span class="managed-link-title">${_esc(l.title)}</span>
-            <span class="managed-link-meta">${Sharing.fmtExpiry(l)} · ${Sharing.fmtViews(l)} ${!l.active ? '· Revoked' : ''}</span>
-          </div>
-          <div class="managed-link-actions">
-            ${l.active ? `<button class="btn-sm-ghost ml-copy" data-token="${l.token}" title="Copy link">Copy</button>` : ''}
-            <button class="btn-sm-danger ml-del" data-token="${l.token}" title="Delete">Delete</button>
-          </div>
-        </div>`).join('');
 
+      // ── Per-link rows ─────────────────────────────────
+      const linksHTML = `
+        <div class="analytics-links-header">
+          <span>DOCUMENT</span><span>VIEWS</span><span>UNIQUE</span>
+          <span>STATUS</span><span>ACTIONS</span>
+        </div>` +
+        links.map(l => {
+          const isActive  = l.active && (!l.expiresAt || new Date(l.expiresAt) > new Date());
+          const statusCls = !l.active ? 'status-revoked' : l.expiresAt && new Date(l.expiresAt) < new Date() ? 'status-expired' : 'status-active';
+          const statusTxt = !l.active ? 'Revoked' : l.expiresAt && new Date(l.expiresAt) < new Date() ? 'Expired' : 'Active';
+          const barPct    = l.maxViews > 0 ? Math.min(100, Math.round(((l.views||0)/l.maxViews)*100)) : -1;
+          return `
+          <div class="analytics-link-row ${!isActive ? 'inactive' : ''}" data-token="${_esc(l.token)}">
+            <div class="al-doc">
+              <span class="al-title">${_esc(l.title)}</span>
+              <span class="al-meta">${Storage.formatDate(l.createdAt)} · ${Sharing.fmtExpiry(l)}</span>
+              ${barPct >= 0 ? `<div class="al-bar-wrap" title="${l.views||0}/${l.maxViews} views used">
+                <div class="al-bar" style="width:${barPct}%"></div>
+              </div>` : ''}
+            </div>
+            <div class="al-stat">${l.views || 0}</div>
+            <div class="al-stat">${l.uniqueViews || 0}</div>
+            <div class="al-status"><span class="al-status-badge ${statusCls}">${statusTxt}</span></div>
+            <div class="al-actions">
+              ${isActive ? `<button class="al-btn ml-copy" data-token="${_esc(l.token)}" title="Copy link">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+              </button>` : ''}
+              ${isActive ? `<button class="al-btn ml-revoke" data-token="${_esc(l.token)}" title="Revoke link">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>` : ''}
+              <button class="al-btn ml-del danger" data-token="${_esc(l.token)}" title="Delete permanently">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
+              </button>
+            </div>
+          </div>`;
+        }).join('');
+
+      listEl.innerHTML = summaryHTML + `<div class="analytics-links-table">${linksHTML}</div>`;
+
+      // ── Bind buttons ──────────────────────────────────
       listEl.querySelectorAll('.ml-copy').forEach(btn => {
         btn.addEventListener('click', () => {
-          navigator.clipboard.writeText(Sharing.shareURL(btn.dataset.token))
-            .then(() => toast('Copied!'))
-            .catch(() => {});
+          const url = Sharing.shareURL(btn.dataset.token);
+          navigator.clipboard.writeText(url).then(() => toast('Link copied!')).catch(() => {});
+        });
+      });
+      listEl.querySelectorAll('.ml-revoke').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          await Sharing.revokeLink(db, btn.dataset.token).catch(() => {});
+          toast('Link revoked', 'info');
+          _openManageLinks(); // refresh
         });
       });
       listEl.querySelectorAll('.ml-del').forEach(btn => {
         btn.addEventListener('click', async () => {
           await Sharing.deleteLink(db, btn.dataset.token).catch(() => {});
-          btn.closest('.managed-link-row')?.remove();
           toast('Link deleted', 'info');
+          _openManageLinks(); // refresh
         });
       });
+
     } catch(e) {
-      listEl.innerHTML = `<p style="color:var(--danger);font-size:13px;padding:16px">${e.message}</p>`;
+      listEl.innerHTML = `<p style="color:var(--danger);font-size:13px;padding:16px">Error: ${_esc(e.message)}</p>`;
     }
   }
 
