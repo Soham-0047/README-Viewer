@@ -140,6 +140,44 @@ const Storage = (() => {
     });
   }
 
+  // One-time migration of legacy top-level `markvault_files` collection
+  // (pre-multi-user schema) into `users/{uid}/files`. Runs once per uid;
+  // tracked via a localStorage flag so it never runs twice for the same user.
+  async function _migrateLegacyFiles() {
+    if (!_db || !_user) return;
+    const flagKey = `MV2_legacy_migrated_${_user.uid}`;
+    if (localStorage.getItem(flagKey)) return;
+    try {
+      const legacy = await _db.collection('markvault_files').get();
+      if (legacy.empty) { localStorage.setItem(flagKey, '1'); return; }
+
+      const userColl = _userColl();
+      let migrated = 0;
+      for (const d of legacy.docs) {
+        const data = d.data();
+        // Accept either {id,name,content,...} format or legacy variants
+        const id   = data.id   || d.id;
+        const name = data.name || data.filename || data.title || `untitled-${d.id.slice(0,6)}.md`;
+        const content = data.content ?? data.body ?? data.markdown ?? '';
+        if (!content && !data.name) continue;
+
+        const file = _build(id, name, content, data.createdAt || null);
+        // Preserve original updatedAt if present so future syncs don't overwrite newer edits
+        if (data.updatedAt) file.updatedAt = data.updatedAt;
+
+        // Save locally + write to user-scoped path
+        _localSave(file);
+        try { await userColl.doc(file.id).set(file, { merge: true }); migrated++; } catch {}
+      }
+      localStorage.setItem(flagKey, '1');
+      if (migrated > 0) console.info(`[MV] Migrated ${migrated} legacy files → users/${_user.uid}/files`);
+    } catch(e) {
+      // Don't block sign-in if legacy collection is unreadable (rules etc.)
+      console.warn('[MV] legacy migration skipped:', e.message);
+      localStorage.setItem(flagKey, '1');
+    }
+  }
+
   async function _pushLocalToCloud() {
     const c = _userColl(); if (!c) return;
     for (const meta of _getIdx()) {
@@ -183,6 +221,8 @@ const Storage = (() => {
         _user = user;
         if (user) {
           _setStatus('syncing','syncing…');
+          // One-time migration of legacy top-level `markvault_files` docs
+          try { await _migrateLegacyFiles(); } catch(e) { console.warn('[MV] migrate:', e.message); }
           // Pull-then-push: cloud is the source of truth on initial connect,
           // so existing Firestore data merges into the current local session.
           try { await _pullCloudToLocal(); } catch(e) { console.warn('[MV] pull:', e.message); }
