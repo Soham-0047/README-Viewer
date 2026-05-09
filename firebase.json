@@ -1,0 +1,21 @@
+{
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "ignore": ["node_modules", ".git", "*.log"],
+      "runtime": "nodejs20"
+    }
+  ],
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "hosting": {
+    "public": ".",
+    "ignore": ["firebase.json", "functions/**", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      { "source": "/stripe-webhook", "function": "stripeWebhook" }
+    ]
+  }
+}

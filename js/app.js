@@ -465,6 +465,11 @@ const App = (() => {
   }
 
   function newFile(starterName = '') {
+    // Soft gate: file count limit
+    if (typeof Subscription !== 'undefined') {
+      const gate = Subscription.canCreateFile(Storage.list().length);
+      if (!gate.allowed) { _showUpgradeModal(gate.upgradeReason, gate); return; }
+    }
     el.newFileName.value = starterName || 'untitled.md';
     el.newFileOverlay.classList.remove('hidden');
     setTimeout(() => { el.newFileName.focus(); el.newFileName.select(); }, 60);
@@ -1379,9 +1384,14 @@ sequenceDiagram
     // Convert mode tabs (Datalab / Gemini / Algorithm)
     document.querySelectorAll('.cmode-tab').forEach(tab => {
       tab.addEventListener('click', () => {
+        const mode = tab.dataset.mode;
+        // Gate: Datalab is a Pro mode by default
+        if (mode === 'datalab' && typeof Subscription !== 'undefined') {
+          const gate = Subscription.canUsePDFDatalab();
+          if (!gate.allowed) { _showUpgradeModal(gate.upgradeReason, gate); return; }
+        }
         document.querySelectorAll('.cmode-tab').forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
-        const mode = tab.dataset.mode;
         document.getElementById('cPanelDatalab')?.classList.toggle('hidden', mode !== 'datalab');
         document.getElementById('cPanelAI')?.classList.toggle('hidden',      mode !== 'ai');
         document.getElementById('cPanelAlgo')?.classList.toggle('hidden',    mode !== 'algo');
@@ -1639,6 +1649,7 @@ sequenceDiagram
     // ── PWA ────────────────────────────────────────────
     _initPWA();
     _initAccountMenu();
+    _initSubscriptionUI();
 
     // Keyboard
     _initKeyboard();
@@ -1794,6 +1805,13 @@ sequenceDiagram
       _updateAvatar(user);
       document.getElementById('userAvatarBtn')?.classList.remove('hidden');
       toast(`Welcome${user.displayName ? ', ' + user.displayName.split(' ')[0] : ''}! ◈`, 'success', 3000);
+      // Refresh subscription state (status now keyed to user uid)
+      if (typeof Subscription !== 'undefined') {
+        Subscription.loadStatus().then(() => {
+          _updateAccountMenuSubState();
+          _updateUsageIndicator();
+        }).catch(() => {});
+      }
       // Boot the app content
       await _bootApp();
     } else {
@@ -1940,13 +1958,37 @@ sequenceDiagram
     const file = Storage.load(S.activeId);
     if (!file) return;
 
+    // Soft gate: active link count
+    if (typeof Subscription !== 'undefined') {
+      try {
+        const links = await Sharing.listLinks(db);
+        const active = links.filter(l => l.active && (!l.expiresAt || new Date(l.expiresAt) > new Date()));
+        const gate = Subscription.canCreateShareLink(active.length);
+        if (!gate.allowed) { _showUpgradeModal(gate.upgradeReason, gate); return; }
+      } catch {}
+    }
+
     el.shareGenerate.disabled = true;
     el.shareGenerate.textContent = 'Generating…';
 
     try {
       const expiryDays = parseInt(el.shareExpiry?.value || '0') || 0;
       const maxViews   = parseInt(el.shareMaxViews?.value || '0') || 0;
-      const link = await Sharing.createLink(db, S.activeId, file.content, file.name, expiryDays, maxViews);
+      const premiumToggle = document.getElementById('sharePremiumToggle');
+      let premium = !!premiumToggle?.checked;
+      // Block premium toggle if not allowed
+      if (premium && typeof Subscription !== 'undefined') {
+        const gate = Subscription.canUsePremiumLinks();
+        if (!gate.allowed) {
+          premium = false;
+          if (premiumToggle) premiumToggle.checked = false;
+          _showUpgradeModal(gate.upgradeReason, gate);
+          el.shareGenerate.disabled = false;
+          el.shareGenerate.textContent = 'Generate Link';
+          return;
+        }
+      }
+      const link = await Sharing.createLink(db, S.activeId, file.content, file.name, expiryDays, maxViews, { premium });
       _currentShareLink = link;
       _renderShareLinkUI(link);
       toast('Share link created!', 'success');
@@ -2162,6 +2204,12 @@ sequenceDiagram
     const file = Storage.load(S.activeId);
     if (!file) return;
 
+    // Daily AI quota gate
+    if (typeof Subscription !== 'undefined') {
+      const aiGate = await Subscription.canUseAI();
+      if (!aiGate.allowed) { _showUpgradeModal(aiGate.upgradeReason, aiGate); return; }
+    }
+
     if (el.aiChatInput) el.aiChatInput.value = '';
     if (el.aiChatSend)  el.aiChatSend.disabled = true;
 
@@ -2196,6 +2244,14 @@ sequenceDiagram
       }
 
       _updateChatProviderLabel();
+      if (typeof Subscription !== 'undefined') {
+        Subscription.incrementUsage('ai_requests').then(_updateUsageIndicator);
+        // Soft warning at 80%+ usage
+        const aiGate = await Subscription.canUseAI();
+        if (aiGate.limit && aiGate.used >= aiGate.limit - 1 && aiGate.limit !== -1) {
+          toast(`${Math.max(0, aiGate.limit - aiGate.used)} AI credit${aiGate.limit - aiGate.used === 1 ? '' : 's'} left today — upgrade for unlimited`, 'warn', 4000);
+        }
+      }
     } catch(e) {
       document.getElementById(thinkId)?.remove();
       _appendChatBubble('ai', `⚠ ${e.message}`);
@@ -2253,6 +2309,10 @@ sequenceDiagram
   async function _openAISummary() {
     if (!S.activeId) return;
     if (!AIRouter.hasAnyKey()) { _openAISettings(); return; }
+    if (typeof Subscription !== 'undefined') {
+      const aiGate = await Subscription.canUseAI();
+      if (!aiGate.allowed) { _showUpgradeModal(aiGate.upgradeReason, aiGate); return; }
+    }
     const file = Storage.load(S.activeId);
     if (!file) return;
 
@@ -2273,6 +2333,7 @@ sequenceDiagram
           });
           if (el.aiSummaryBody && md) el.aiSummaryBody.innerHTML = _renderSummaryMarkdown(md);
           S._lastSummary = md;
+          if (typeof Subscription !== 'undefined') Subscription.incrementUsage('ai_requests').then(_updateUsageIndicator);
         })(),
         AIFeatures.classifyDocument(file.content, file.name).catch(() => null),
       ]);
@@ -2360,6 +2421,14 @@ sequenceDiagram
   async function _runWritingTool(toolId, btn, targetLang) {
     if (!_wtSelectedText.trim()) { toast('Select text in the editor first', 'info'); return; }
     if (!AIRouter.hasAnyKey()) { _openAISettings(); return; }
+    // Pro tool gate
+    if (typeof Subscription !== 'undefined') {
+      const toolGate = Subscription.canUseAITool(toolId);
+      if (!toolGate.allowed) { _showUpgradeModal(toolGate.upgradeReason, toolGate); return; }
+      // Daily AI quota gate
+      const aiGate = await Subscription.canUseAI();
+      if (!aiGate.allowed) { _showUpgradeModal(aiGate.upgradeReason, aiGate); return; }
+    }
 
     if (btn) el.wtTools?.querySelectorAll('.wt-tool-btn').forEach(b => b.classList.remove('active'));
     if (btn) btn.classList.add('active');
@@ -2378,6 +2447,7 @@ sequenceDiagram
       _wtActiveResult = result || el.wtResultText?.textContent || '';
       if (el.wtResultLabel) el.wtResultLabel.textContent = 'Result — review before applying';
       if (el.wtAccept) el.wtAccept.disabled = false;
+      if (typeof Subscription !== 'undefined') Subscription.incrementUsage('ai_requests').then(_updateUsageIndicator);
     } catch(e) {
       if (el.wtResultText) el.wtResultText.textContent = `Error: ${e.message}`;
       if (el.wtResultLabel) el.wtResultLabel.textContent = 'Error';
@@ -2831,16 +2901,24 @@ sequenceDiagram
 
     const renderGrid = (cat) => {
       const items = cat === 'All' ? Templates.getAll() : Templates.getByCategory(cat);
-      gridEl.innerHTML = items.map(t => `
-        <div class="template-card" data-id="${t.id}">
+      gridEl.innerHTML = items.map(t => {
+        const locked = (typeof Subscription !== 'undefined') && !Subscription.canUseTemplate(t.id).allowed;
+        return `
+        <div class="template-card${locked ? ' locked' : ''}" data-id="${t.id}" style="position:relative">
+          ${locked ? '<span class="pro-badge corner">PRO</span>' : ''}
           <div class="template-card-icon">${t.icon}</div>
           <div class="template-card-name">${_esc(t.name)}</div>
           <div class="template-card-desc">${_esc(t.description)}</div>
-        </div>`).join('');
+        </div>`;
+      }).join('');
       gridEl.querySelectorAll('.template-card').forEach(card => {
         card.addEventListener('click', () => {
           const tpl = Templates.getById(card.dataset.id);
           if (!tpl) return;
+          if (typeof Subscription !== 'undefined') {
+            const gate = Subscription.canUseTemplate(tpl.id);
+            if (!gate.allowed) { _showUpgradeModal(gate.upgradeReason, gate); return; }
+          }
           modal.classList.add('hidden');
           _createFromTemplate(tpl);
         });
@@ -2938,6 +3016,431 @@ sequenceDiagram
       }
     } catch {}
     return url; // return as-is for direct URLs
+  }
+
+  // ══════════════════════════════════════════════════════
+  //  SUBSCRIPTION / MONETIZATION
+  // ══════════════════════════════════════════════════════
+  const UPGRADE_REASONS = {
+    ai:            { icon:'🤖', title:"You've used today's AI credits", desc:'Free plan includes {limit} AI requests per day. Upgrade for unlimited.', highlight:true },
+    writing_tools: { icon:'✍️', title:'Pro Writing Tool',                desc:'This writing tool is available on Pro. Free plan includes Improve and Fix Grammar.' },
+    files:         { icon:'📁', title:'File limit reached',              desc:'Free plan supports up to {limit} files. Upgrade for unlimited.', highlight:true },
+    sharing:       { icon:'🔗', title:'Share link limit reached',        desc:'Free plan supports {limit} active share links.', highlight:true },
+    premium_links: { icon:'🔒', title:'Premium Share Links',              desc:'Create paywall-protected links that only your subscribers can access.' },
+    pdf:           { icon:'📄', title:'Advanced PDF Conversion',          desc:'Datalab API gives near-perfect PDF conversion with table and math support.' },
+    templates:     { icon:'📋', title:'Pro Template',                     desc:'This template is available on Pro. Free plan includes Blank, Meeting Notes, and README.' },
+    analytics:     { icon:'📊', title:'Full Analytics',                   desc:'See unique viewers, geographic data, and per-link charts.' },
+    export_pdf:    { icon:'📤', title:'PDF Export',                       desc:'Export documents as polished PDF files. Pro only.' },
+  };
+
+  let _upgradeBilling = 'monthly';
+
+  function _showUpgradeModal(reason = 'ai', gateData = {}) {
+    if (typeof Subscription === 'undefined') return;
+    // Don't spam: skip if already shown this session for the same reason
+    if (Subscription.wasReasonShown(reason)) {
+      // still show — user may have explicitly clicked. But don't auto-pop.
+    }
+    Subscription.markReasonShown(reason);
+
+    const r = UPGRADE_REASONS[reason] || UPGRADE_REASONS.ai;
+    const overlay = document.getElementById('upgradeModal');
+    if (!overlay) return;
+
+    document.getElementById('upgradeIcon').textContent  = r.icon;
+    document.getElementById('upgradeTitle').textContent = r.title;
+    document.getElementById('upgradeDesc').textContent  =
+      (r.desc || '').replace('{limit}', gateData.limit ?? '');
+
+    // Usage bar
+    const usageBar  = document.getElementById('upgradeUsageBar');
+    const usageLab  = document.getElementById('upgradeUsageLabel');
+    const usageFill = document.getElementById('upgradeUsageFill');
+    if (r.highlight && gateData.limit && gateData.used !== undefined) {
+      usageBar.classList.remove('hidden');
+      usageLab.textContent = `${gateData.used} / ${gateData.limit} used today`;
+      const pct = Math.min(100, Math.round((gateData.used / gateData.limit) * 100));
+      usageFill.style.width = `${pct}%`;
+    } else {
+      usageBar.classList.add('hidden');
+    }
+
+    // Pricing
+    _upgradeBilling = 'monthly';
+    document.getElementById('upgradePickMonthly').classList.add('active');
+    document.getElementById('upgradePickYearly').classList.remove('active');
+    _updateUpgradePrice();
+
+    // Trial vs upgrade label
+    const trialDays = Subscription.getConfig('pro_trial_days') || 0;
+    const cta = document.getElementById('upgradeCheckoutBtn');
+    cta.textContent = trialDays > 0 ? `Start ${trialDays}-day free trial` : 'Upgrade now';
+
+    // Test mode banner
+    const pubKey = Subscription.getConfig('stripe_publishable_key') || '';
+    document.getElementById('upgradeTestBanner').classList.toggle('hidden', !pubKey.startsWith('pk_test_'));
+
+    // Show user email if signed in
+    const user = Storage.getCurrentUser();
+    const emailEl = document.getElementById('upgradeUserEmail');
+    if (user?.email) {
+      emailEl.textContent = `Upgrading account: ${user.email}`;
+      emailEl.classList.remove('hidden');
+    } else {
+      emailEl.classList.add('hidden');
+    }
+
+    overlay.classList.remove('hidden');
+  }
+
+  function _hideUpgradeModal() {
+    document.getElementById('upgradeModal')?.classList.add('hidden');
+  }
+
+  function _updateUpgradePrice() {
+    if (typeof Subscription === 'undefined') return;
+    const m = Subscription.getConfig('pro_price_monthly') || 5;
+    const y = Subscription.getConfig('pro_price_yearly')  || 45;
+    const num = document.getElementById('upgradePriceNum');
+    const per = document.getElementById('upgradePricePeriod');
+    const note= document.getElementById('upgradeYearlyNote');
+    const savePill = document.getElementById('upgradeSavePill');
+    if (_upgradeBilling === 'yearly') {
+      const monthly = (y / 12).toFixed(2).replace(/\.00$/,'');
+      num.textContent = monthly;
+      per.textContent = '/month';
+      note.classList.remove('hidden');
+      note.textContent = `Billed yearly ($${y})`;
+    } else {
+      num.textContent = m;
+      per.textContent = '/month';
+      note.classList.add('hidden');
+    }
+    if (savePill && m && y) {
+      const savePct = Math.max(0, Math.round((1 - (y / 12) / m) * 100));
+      savePill.textContent = `save ${savePct}%`;
+    }
+  }
+
+  function _wireUpgradeModal() {
+    document.getElementById('upgradePickMonthly')?.addEventListener('click', () => {
+      _upgradeBilling = 'monthly';
+      document.getElementById('upgradePickMonthly').classList.add('active');
+      document.getElementById('upgradePickYearly').classList.remove('active');
+      _updateUpgradePrice();
+    });
+    document.getElementById('upgradePickYearly')?.addEventListener('click', () => {
+      _upgradeBilling = 'yearly';
+      document.getElementById('upgradePickYearly').classList.add('active');
+      document.getElementById('upgradePickMonthly').classList.remove('active');
+      _updateUpgradePrice();
+    });
+    document.getElementById('upgradeMaybeLater')?.addEventListener('click', _hideUpgradeModal);
+    document.getElementById('upgradeModal')?.addEventListener('click', e => {
+      if (e.target === document.getElementById('upgradeModal')) _hideUpgradeModal();
+    });
+    document.getElementById('upgradeCheckoutBtn')?.addEventListener('click', async () => {
+      const btn = document.getElementById('upgradeCheckoutBtn');
+      btn.disabled = true; btn.textContent = 'Redirecting…';
+      try {
+        if (!Storage.isSignedIn()) {
+          await Storage.signInWithGoogle().catch(() => {});
+        }
+        await Subscription.startCheckout(_upgradeBilling);
+      } catch(e) {
+        toast('Checkout failed: ' + e.message, 'error', 5000);
+        btn.disabled = false;
+        btn.textContent = 'Try again';
+      }
+    });
+  }
+
+  // ── Usage indicator in sidebar ──
+  async function _updateUsageIndicator() {
+    if (typeof Subscription === 'undefined') return;
+    const ind = document.getElementById('usageIndicator');
+    const fill= document.getElementById('usageBarFill');
+    const text= document.getElementById('usageBarText');
+    const link= document.getElementById('usageUpgradeLink');
+    const wrap= document.getElementById('usageBarWrap');
+    if (!ind) return;
+    ind.classList.remove('hidden');
+
+    if (Subscription.isPro()) {
+      wrap.style.display = 'none';
+      const status = Subscription.getStatus();
+      if (status?.status === 'trialing') {
+        const days = Subscription.getTrialDaysLeft();
+        text.innerHTML = `<span class="usage-badge trial${days < 3 ? ' urgent' : ''}">⏱ Trial · ${days}d left</span>`;
+        link.classList.remove('hidden'); link.textContent = 'Upgrade';
+      } else {
+        const end = status?.currentPeriodEnd ? new Date(status.currentPeriodEnd).toLocaleDateString() : '';
+        text.innerHTML = `<span class="usage-badge pro" title="Renews ${end}">◈ Pro</span>`;
+        link.classList.add('hidden');
+      }
+      return;
+    }
+
+    wrap.style.display = '';
+    const limit = Subscription.getConfig('ai_requests_per_day_free');
+    if (limit === -1) {
+      text.textContent = 'Unlimited AI today';
+      fill.style.width = '0%';
+      link.classList.add('hidden');
+      return;
+    }
+    const used = await Subscription.getUsageToday('ai_requests');
+    const pct  = Math.min(100, Math.round((used / limit) * 100));
+    fill.style.width = `${pct}%`;
+    fill.classList.toggle('warn',   pct >= 80 && pct < 100);
+    fill.classList.toggle('danger', pct >= 100);
+    text.textContent = `${used} / ${limit} AI credits today`;
+    link.classList.toggle('hidden', pct < 100);
+    link.onclick = () => _showUpgradeModal('ai', { limit, used });
+  }
+
+  // ── Account menu Pro state ──
+  function _updateAccountMenuSubState() {
+    if (typeof Subscription === 'undefined') return;
+    const upgrade   = document.getElementById('accountMenuUpgrade');
+    const manage    = document.getElementById('accountMenuManageSub');
+    const admin     = document.getElementById('accountMenuAdmin');
+    const banner    = document.getElementById('accountMenuProBanner');
+    const proPill   = document.getElementById('topbarProPill');
+    if (!upgrade || !manage || !admin) return;
+
+    const isPro   = Subscription.isPro();
+    const isOwner = Subscription.isOwner();
+    const status  = Subscription.getStatus();
+
+    if (isPro) {
+      upgrade.classList.add('hidden');
+      manage.classList.remove('hidden');
+      banner.classList.remove('hidden');
+      if (status?.status === 'trialing') {
+        const days = Subscription.getTrialDaysLeft();
+        banner.textContent = `Pro · Trial ends in ${days} day${days === 1 ? '' : 's'}`;
+      } else if (status?.currentPeriodEnd) {
+        banner.textContent = `Pro · Renews ${new Date(status.currentPeriodEnd).toLocaleDateString()}`;
+      } else {
+        banner.textContent = 'Pro plan';
+      }
+      proPill?.classList.remove('hidden');
+    } else {
+      upgrade.classList.remove('hidden');
+      manage.classList.add('hidden');
+      banner.classList.add('hidden');
+      proPill?.classList.add('hidden');
+    }
+
+    admin.classList.toggle('hidden', !isOwner);
+  }
+
+  // ── Admin panel ──
+  function _openAdminPanel() {
+    if (typeof Subscription === 'undefined' || !Subscription.isOwner()) {
+      toast('Admin access required', 'error');
+      return;
+    }
+    document.getElementById('adminModal')?.classList.remove('hidden');
+    _renderAdminFlags();
+    _renderAdminPricing();
+    // Lazy: subs/usage/paywall fill on tab switch
+  }
+
+  function _adminTab(name) {
+    ['flags','pricing','subs','usage','paywall'].forEach(n => {
+      document.querySelector(`.admin-tab[data-tab="${n}"]`)?.classList.toggle('active', n === name);
+      document.getElementById('adminPanel' + n.charAt(0).toUpperCase() + n.slice(1))?.classList.toggle('hidden', n !== name);
+    });
+    if (name === 'subs')    _renderAdminSubs();
+    if (name === 'usage')   _renderAdminUsage();
+    if (name === 'paywall') _renderAdminPaywall();
+  }
+
+  const ADMIN_GROUPS = {
+    'AI':         ['ai_requests_per_day_free','ai_tools_free','ai_chat_free','ai_summary_free'],
+    'Files':      ['files_max_free'],
+    'Sharing':    ['sharing_max_links_free','sharing_premium_links_free','sharing_analytics_free'],
+    'PDF':        ['pdf_algo_free','pdf_datalab_free','pdf_gemini_free'],
+    'Templates':  ['templates_free'],
+    'Export':     ['export_html_free','export_pdf_free'],
+    'Misc':       ['split_pane_free','focus_mode_free','cloud_sync_device_limit_free','paywall_preview_lines','upgrade_modal_show_after_days','owner_uid'],
+  };
+
+  function _renderAdminFlags() {
+    const root = document.getElementById('adminPanelFlags');
+    if (!root) return;
+    root.innerHTML = '';
+    for (const [group, keys] of Object.entries(ADMIN_GROUPS)) {
+      const title = document.createElement('div');
+      title.className = 'admin-section-title';
+      title.textContent = group;
+      root.appendChild(title);
+      keys.forEach(key => {
+        const row = document.createElement('div');
+        row.className = 'admin-row';
+        const val = Subscription.getConfig(key);
+        const isArr = Array.isArray(val);
+        const isBool = typeof val === 'boolean';
+        const inputType = isBool ? 'checkbox' : 'text';
+        const inputVal  = isArr ? val.join(',') : (isBool ? '' : String(val ?? ''));
+        row.innerHTML = `
+          <span class="admin-row-label" title="${key}">${key.replace(/_/g,' ')}</span>
+          <span style="color:var(--txt3);font-size:11px">current: <code>${isArr ? val.join(', ') : String(val)}</code></span>
+          <input class="admin-row-input" type="${inputType}" ${isBool && val ? 'checked' : ''} value="${_esc(inputVal)}" data-key="${key}" data-arr="${isArr}" data-bool="${isBool}" />
+          <button class="admin-row-save" data-save="${key}">Save</button>`;
+        root.appendChild(row);
+      });
+    }
+    root.querySelectorAll('[data-save]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const key = btn.dataset.save;
+        const inp = root.querySelector(`[data-key="${key}"]`);
+        let v;
+        if (inp.dataset.bool === 'true')      v = inp.checked;
+        else if (inp.dataset.arr === 'true')  v = inp.value.split(',').map(s => s.trim()).filter(Boolean);
+        else if (/^-?\d+$/.test(inp.value))   v = parseInt(inp.value);
+        else                                  v = inp.value;
+        try {
+          btn.disabled = true; btn.textContent = '…';
+          await Storage.configRef().set({ [key]: v }, { merge: true });
+          btn.textContent = '✓';
+          setTimeout(() => { btn.disabled = false; btn.textContent = 'Save'; }, 1200);
+        } catch(e) {
+          toast('Save failed: ' + e.message, 'error');
+          btn.disabled = false; btn.textContent = 'Save';
+        }
+      });
+    });
+  }
+
+  function _renderAdminPricing() {
+    const root = document.getElementById('adminPanelPricing');
+    if (!root) return;
+    const keys = ['pro_price_monthly','pro_price_yearly','pro_trial_days','stripe_price_id_monthly','stripe_price_id_yearly','stripe_publishable_key'];
+    root.innerHTML = keys.map(k => {
+      const val = Subscription.getConfig(k);
+      return `<div class="admin-row">
+        <span class="admin-row-label">${k.replace(/_/g,' ')}</span>
+        <span style="color:var(--txt3);font-size:11px"><code>${_esc(String(val ?? ''))}</code></span>
+        <input class="admin-row-input" type="text" data-key="${k}" value="${_esc(String(val ?? ''))}" />
+        <button class="admin-row-save" data-save="${k}">Save</button>
+      </div>`;
+    }).join('');
+    root.querySelectorAll('[data-save]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const key = btn.dataset.save;
+        const inp = root.querySelector(`[data-key="${key}"]`);
+        const v = /^-?\d+$/.test(inp.value) ? parseInt(inp.value) : inp.value;
+        btn.disabled = true; btn.textContent = '…';
+        try {
+          await Storage.configRef().set({ [key]: v }, { merge: true });
+          btn.textContent = '✓';
+          setTimeout(() => { btn.disabled = false; btn.textContent = 'Save'; }, 1200);
+        } catch(e) { toast('Save failed: ' + e.message, 'error'); btn.disabled = false; btn.textContent = 'Save'; }
+      });
+    });
+  }
+
+  async function _renderAdminSubs() {
+    const root = document.getElementById('adminPanelSubs');
+    if (!root) return;
+    root.innerHTML = '<div style="padding:20px;color:var(--txt3)">Loading subscribers…</div>';
+    try {
+      const db = Storage.getDB();
+      // Collection group query — needs Firestore index in production
+      const snap = await db.collectionGroup('subscription').where('status','in',['active','trialing']).get();
+      const rows = snap.docs.map(d => ({ uid: d.ref.parent.parent.id, ...d.data() }));
+      const mrr = rows.length * (Subscription.getConfig('pro_price_monthly') || 5);
+      root.innerHTML = `
+        <div class="admin-stats-grid">
+          <div class="admin-stat-card"><span class="admin-stat-num">${rows.length}</span><span class="admin-stat-label">Active subs</span></div>
+          <div class="admin-stat-card"><span class="admin-stat-num">$${mrr}</span><span class="admin-stat-label">MRR estimate</span></div>
+        </div>
+        ${rows.length === 0 ? '<div style="padding:20px;color:var(--txt3)">No subscribers yet.</div>' :
+          '<table style="width:100%;font-size:12px;margin-top:12px"><thead><tr><th align="left">UID</th><th align="left">Plan</th><th align="left">Status</th><th align="left">Period end</th></tr></thead><tbody>' +
+          rows.map(r => `<tr><td style="font-family:monospace;color:var(--txt3)">${_esc(r.uid.slice(0,12))}…</td><td>${_esc(r.plan||'—')}</td><td>${_esc(r.status||'—')}</td><td>${r.currentPeriodEnd ? new Date(r.currentPeriodEnd).toLocaleDateString() : '—'}</td></tr>`).join('') +
+          '</tbody></table>'}`;
+    } catch(e) {
+      root.innerHTML = `<div style="padding:20px;color:var(--txt3)">Could not load: ${_esc(e.message)} — collection group queries need a Firestore index.</div>`;
+    }
+  }
+
+  function _renderAdminUsage() {
+    const root = document.getElementById('adminPanelUsage');
+    if (!root) return;
+    root.innerHTML = `<div style="padding:20px;color:var(--txt3)">Per-user usage analytics need a backend aggregation. Today's local usage: <code>${_esc(JSON.stringify(JSON.parse(localStorage.getItem('mv_usage_' + new Date().toISOString().slice(0,10)) || '{}')))}</code></div>`;
+  }
+
+  function _renderAdminPaywall() {
+    const root = document.getElementById('adminPanelPaywall');
+    if (!root) return;
+    const lines = Subscription.getConfig('paywall_preview_lines') || 80;
+    root.innerHTML = `
+      <div style="padding:14px 12px">
+        <label style="font-size:12px;color:var(--txt2)">Preview lines: <strong id="pwLinesLabel">${lines}</strong></label>
+        <input type="range" min="20" max="200" value="${lines}" id="pwLinesSlider" style="width:100%;margin-top:6px" />
+        <button class="admin-row-save" id="pwLinesSave" style="margin-top:8px">Save</button>
+      </div>`;
+    document.getElementById('pwLinesSlider').addEventListener('input', e => {
+      document.getElementById('pwLinesLabel').textContent = e.target.value;
+    });
+    document.getElementById('pwLinesSave').addEventListener('click', async () => {
+      const v = parseInt(document.getElementById('pwLinesSlider').value);
+      try {
+        await Storage.configRef().set({ paywall_preview_lines: v }, { merge: true });
+        toast('Saved', 'success');
+      } catch(e) { toast('Save failed: ' + e.message, 'error'); }
+    });
+  }
+
+  function _wireAdminPanel() {
+    document.querySelectorAll('.admin-tab').forEach(tab => {
+      tab.addEventListener('click', () => _adminTab(tab.dataset.tab));
+    });
+    document.getElementById('adminClose')?.addEventListener('click', () => {
+      document.getElementById('adminModal')?.classList.add('hidden');
+    });
+    document.getElementById('adminModal')?.addEventListener('click', e => {
+      if (e.target === document.getElementById('adminModal'))
+        document.getElementById('adminModal').classList.add('hidden');
+    });
+  }
+
+  function _initSubscriptionUI() {
+    if (typeof Subscription === 'undefined') return;
+    _wireUpgradeModal();
+    _wireAdminPanel();
+
+    // Wire account menu items
+    document.getElementById('accountMenuUpgrade')?.addEventListener('click', () => {
+      document.getElementById('accountMenu')?.classList.add('hidden');
+      _showUpgradeModal('ai', {});
+    });
+    document.getElementById('accountMenuManageSub')?.addEventListener('click', async () => {
+      document.getElementById('accountMenu')?.classList.add('hidden');
+      try { await Subscription.openCustomerPortal(); }
+      catch(e) { toast('Could not open portal: ' + e.message, 'error'); }
+    });
+    document.getElementById('accountMenuAdmin')?.addEventListener('click', () => {
+      document.getElementById('accountMenu')?.classList.add('hidden');
+      _openAdminPanel();
+    });
+
+    // Re-render UI bits on subscription/config change
+    Subscription.onChange(() => {
+      _updateAccountMenuSubState();
+      _updateUsageIndicator();
+    });
+    _updateAccountMenuSubState();
+    _updateUsageIndicator();
+
+    // Boot Subscription (non-blocking)
+    Subscription.init().then(() => {
+      _updateAccountMenuSubState();
+      _updateUsageIndicator();
+    }).catch(e => console.warn('[App] Subscription init:', e.message));
   }
 
   // ══════════════════════════════════════════════════════

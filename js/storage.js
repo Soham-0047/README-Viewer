@@ -124,6 +124,22 @@ const Storage = (() => {
     }, err => { console.warn('[MV] listener:',err.message); _setStatus('error','error'); });
   }
 
+  // Pull cloud-only files into localStorage so the current session sees
+  // everything that already exists in Firestore. This runs BEFORE push so
+  // freshly signed-in users instantly see their existing cloud data.
+  async function _pullCloudToLocal() {
+    const c = _userColl(); if (!c) return;
+    const snap = await c.get();
+    snap.docs.forEach(d => {
+      const data = d.data();
+      if (!data.id || !data.name) return;
+      const loc = _localLoad(data.id);
+      if (!loc || (data.updatedAt && data.updatedAt > loc.updatedAt)) {
+        _localSave({ ...data, sizeLabel: _fmtSize(data.bytes) });
+      }
+    });
+  }
+
   async function _pushLocalToCloud() {
     const c = _userColl(); if (!c) return;
     for (const meta of _getIdx()) {
@@ -155,16 +171,25 @@ const Storage = (() => {
       _db    = _fbApp.firestore();
       _auth  = _fbApp.auth();
 
-      // Test connectivity
-      await _db.collection('_ping').limit(1).get().catch(()=>{});
+      // Force LOCAL persistence (IndexedDB) so session survives reloads even
+      // on named (non-default) apps. Must be set before any sign-in attempt.
+      try { await _auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL); } catch(e) { console.warn('[MV] persistence:', e.message); }
 
-      // Auth state listener — fires immediately with current user
+      // Test connectivity (non-blocking)
+      _db.collection('_ping').limit(1).get().catch(()=>{});
+
+      // Auth state listener — fires immediately with current (restored) user
       _unsubAuth = _auth.onAuthStateChanged(async user => {
         _user = user;
         if (user) {
-          _setStatus('synced','synced');
-          await _pushLocalToCloud();
+          _setStatus('syncing','syncing…');
+          // Pull-then-push: cloud is the source of truth on initial connect,
+          // so existing Firestore data merges into the current local session.
+          try { await _pullCloudToLocal(); } catch(e) { console.warn('[MV] pull:', e.message); }
+          try { await _pushLocalToCloud(); } catch(e) { console.warn('[MV] push:', e.message); }
           _startFileListener();
+          _setStatus('synced','synced');
+          if (_onRemoteChange) _onRemoteChange();
         } else {
           if (_unsubFile) { _unsubFile(); _unsubFile=null; }
           _setStatus('connected','no account');
@@ -201,16 +226,34 @@ const Storage = (() => {
   // ── Auth ─────────────────────────────────────────────
   async function signInWithGoogle() {
     if (!_auth) throw new Error('Set up Firebase first (☁ icon in sidebar).');
+    // Re-assert LOCAL persistence right before sign-in (some browsers reset it)
+    try { await _auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL); } catch {}
     const provider = new firebase.auth.GoogleAuthProvider();
     provider.addScope('email'); provider.addScope('profile');
+    provider.setCustomParameters({ prompt: 'select_account' });
+
+    // Mobile / cross-origin-isolated contexts: popup is unreliable.
+    // Use redirect on small screens or when COOP is set.
+    const useRedirect =
+      window.innerWidth < 720 ||
+      /Mobi|Android/i.test(navigator.userAgent) ||
+      (typeof window.crossOriginIsolated !== 'undefined' && window.crossOriginIsolated);
+
+    if (useRedirect) {
+      await _auth.signInWithRedirect(provider);
+      return null;
+    }
+
     try {
       const result = await _auth.signInWithPopup(provider);
       return result.user;
     } catch(e) {
-      // Popup blocked (common on mobile) → redirect flow
-      if (['auth/popup-blocked','auth/popup-closed-by-user','auth/cancelled-popup-request'].includes(e.code)) {
-        await _auth.signInWithRedirect(provider);
-        return null;
+      // Any popup-related failure (blocked, COOP, closed, network) → redirect fallback
+      const code = e?.code || '';
+      const popupErr = code.startsWith('auth/popup') || code === 'auth/cancelled-popup-request' ||
+                       code === 'auth/web-storage-unsupported' || code === 'auth/operation-not-supported-in-this-environment';
+      if (popupErr) {
+        try { await _auth.signInWithRedirect(provider); return null; } catch(e2) { throw e2; }
       }
       throw e;
     }
@@ -304,6 +347,27 @@ const Storage = (() => {
   function onRemoteChange(cb) { _onRemoteChange=cb; }
   function onAuthChange(cb)   { _onAuthChange=cb; }
 
+  // ── Subscription convenience helpers (used by Subscription module) ──
+  async function getSubscriptionStatus() {
+    if (!_db || !_user) return { plan:'free', status:'none' };
+    try {
+      const doc = await _db.collection('users').doc(_user.uid).collection('subscription').doc('status').get();
+      return doc.exists ? doc.data() : { plan:'free', status:'none' };
+    } catch { return { plan:'free', status:'none' }; }
+  }
+  function subscriptionStatusRef() {
+    if (!_db || !_user) return null;
+    return _db.collection('users').doc(_user.uid).collection('subscription').doc('status');
+  }
+  function userUsageRef(date) {
+    if (!_db || !_user) return null;
+    return _db.collection('users').doc(_user.uid).collection('usage').doc(date);
+  }
+  function configRef() {
+    if (!_db) return null;
+    return _db.collection('mv_config').doc('features');
+  }
+
   return {
     save, load, remove, removeAll, list, searchContent, reorderFiles,
     connectFirebase, disconnectFirebase, autoConnect, forcSync,
@@ -312,5 +376,6 @@ const Storage = (() => {
     getSavedConfig, getDB, getAuth,
     getPrefs, setPref, stats, formatDate, formatSize,
     onStatusChange, onRemoteChange, onAuthChange,
+    getSubscriptionStatus, subscriptionStatusRef, userUsageRef, configRef,
   };
 })();

@@ -1,0 +1,38 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Per-user files
+    match /users/{uid}/files/{fileId} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Subscription status — readable + writable only by owner-user.
+    // Webhook writes via Admin SDK bypass these rules.
+    match /users/{uid}/subscription/{doc} {
+      allow read:  if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // Per-user usage tracking — user can read/write their own
+    match /users/{uid}/usage/{date} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Public share links
+    match /mv_shared_links/{token} {
+      allow read:  if true;
+      allow write: if request.auth != null;
+    }
+
+    // Live feature config
+    //   - public read so the viewer can resolve gates without auth
+    //   - write only by the owner (UID stored in the doc itself)
+    match /mv_config/{doc} {
+      allow read: if true;
+      allow write: if request.auth != null
+                   && request.auth.uid == resource.data.owner_uid;
+      allow create: if request.auth != null;
+    }
+  }
+}

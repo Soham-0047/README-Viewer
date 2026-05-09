@@ -50,6 +50,10 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-functions-compat.js"></script>
+
+  <!-- Stripe.js (loaded eagerly so checkout redirect is instant) -->
+  <script src="https://js.stripe.com/v3/"></script>
 
   <link rel="stylesheet" href="css/style.css" />
 </head>
@@ -116,6 +120,17 @@
     <ul class="file-list" id="fileList" role="listbox" aria-label="Saved files"></ul>
   </nav>
 
+  <!-- Usage indicator (free: AI credits bar; pro: badge; trial: countdown) -->
+  <div class="usage-indicator hidden" id="usageIndicator">
+    <div class="usage-bar-wrap" id="usageBarWrap">
+      <div class="usage-bar-fill" id="usageBarFill"></div>
+    </div>
+    <div class="usage-bar-label" id="usageBarLabel">
+      <span id="usageBarText">— AI credits today</span>
+      <a class="upgrade-link hidden" id="usageUpgradeLink">Upgrade</a>
+    </div>
+  </div>
+
   <div class="sidebar-footer">
     <button class="theme-btn" id="themeToggle" title="Toggle theme">
       <span id="themeIconDark">☀︎</span>
@@ -137,7 +152,7 @@
     <button class="btn-icon" id="sidebarOpen" aria-label="Toggle sidebar">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
     </button>
-    <div class="topbar-title" id="topbarTitle">Select or create a file</div>
+    <div class="topbar-title" id="topbarTitle">Select or create a file<span class="topbar-pro-pill hidden" id="topbarProPill" title="MarkVault Pro">◈ PRO</span></div>
     <div class="topbar-actions">
       <button class="btn-pill hidden" id="tocBtn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="18" y2="18"/></svg><span class="btn-label">TOC</span></button>
       <button class="btn-pill hidden" id="editBtn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg><span class="btn-label">Edit</span></button>
@@ -599,6 +614,10 @@ service cloud.firestore {
           <option value="100">100 times</option>
         </select>
       </div>
+      <label class="save-key-row" id="sharePremiumRow" title="Only your subscribers will be able to read the full document. Free viewers see a preview + paywall.">
+        <input type="checkbox" id="sharePremiumToggle" />
+        <span>🔒 Premium link <span class="pro-badge" id="sharePremiumBadge" style="margin-left:4px">PRO</span> — paywall non-subscribers</span>
+      </label>
 
       <!-- QR code container -->
       <div class="share-qr-wrap hidden" id="shareQRWrap">
@@ -917,6 +936,21 @@ service cloud.firestore {
   <div class="account-menu-divider"></div>
   <div class="account-menu-stats" id="accountMenuStats"></div>
   <div class="account-menu-divider"></div>
+  <!-- Subscription block (filled by app.js based on plan/status) -->
+  <button class="account-menu-item upgrade hidden" id="accountMenuUpgrade">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15 8 22 9 17 14 18 21 12 18 6 21 7 14 2 9 9 8 12 2"/></svg>
+    <span id="accountMenuUpgradeLabel">Upgrade to Pro ✦</span>
+  </button>
+  <div class="account-menu-pro-banner hidden" id="accountMenuProBanner"></div>
+  <button class="account-menu-item hidden" id="accountMenuManageSub">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.6 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.6a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+    Manage subscription
+  </button>
+  <button class="account-menu-item admin hidden" id="accountMenuAdmin">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4 2 7L12 16l-6.5 4 2-7L2 9h7z"/></svg>
+    Admin Panel ⚙
+  </button>
+  <div class="account-menu-divider"></div>
   <button class="account-menu-item" id="accountMenuSignOut">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
     Sign out
@@ -927,12 +961,82 @@ service cloud.firestore {
   </button>
 </div>
 
-<script src="js/storage.js?v=5"></script>
-<script src="js/renderer.js?v=5"></script>
-<script src="js/sharing.js?v=5"></script>
-<script src="js/ai.js?v=5"></script>
-<script src="js/templates.js?v=5"></script>
-<script src="js/pdfhandler.js?v=5"></script>
-<script src="js/app.js?v=5"></script>
+<!-- ═══ UPGRADE MODAL ═══════════════════════════════════ -->
+<div class="upgrade-modal-overlay hidden" id="upgradeModal">
+  <div class="upgrade-modal" role="dialog" aria-modal="true">
+    <div class="upgrade-test-banner hidden" id="upgradeTestBanner">⚠ TEST MODE — Stripe is in test mode, no real charges</div>
+    <div class="upgrade-header">
+      <div class="upgrade-icon" id="upgradeIcon">✦</div>
+      <h2 class="upgrade-title" id="upgradeTitle">Upgrade to Pro</h2>
+      <p class="upgrade-desc" id="upgradeDesc">Unlock everything MarkVault offers.</p>
+      <div class="upgrade-usage-bar hidden" id="upgradeUsageBar">
+        <span id="upgradeUsageLabel"></span>
+        <div class="uu-track"><div class="uu-fill" id="upgradeUsageFill"></div></div>
+      </div>
+    </div>
+
+    <div class="upgrade-pricing-toggle">
+      <button class="active" data-billing="monthly" id="upgradePickMonthly">Monthly</button>
+      <button data-billing="yearly" id="upgradePickYearly">Yearly <span class="upgrade-save-pill" id="upgradeSavePill">save 25%</span></button>
+    </div>
+
+    <div class="upgrade-plan-card">
+      <div class="upgrade-price">
+        <span class="currency">$</span><span id="upgradePriceNum">5</span><span class="period" id="upgradePricePeriod">/month</span>
+      </div>
+      <p class="upgrade-yearly-note hidden" id="upgradeYearlyNote">Billed yearly</p>
+    </div>
+
+    <ul class="upgrade-feature-grid">
+      <li>Unlimited AI requests</li>
+      <li>All 11 writing tools</li>
+      <li>Unlimited files</li>
+      <li>Unlimited share links</li>
+      <li>Premium paywalled links</li>
+      <li>Datalab PDF conversion</li>
+      <li>All 9 templates</li>
+      <li>Full analytics</li>
+      <li>HTML + PDF export</li>
+      <li>All-device cloud sync</li>
+    </ul>
+
+    <div class="upgrade-cta-wrap">
+      <button class="upgrade-cta-primary" id="upgradeCheckoutBtn">Start free trial</button>
+      <p class="upgrade-user-email hidden" id="upgradeUserEmail"></p>
+      <button class="upgrade-secondary" id="upgradeMaybeLater">Maybe later</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ ADMIN PANEL MODAL (owner only) ═══════════════════ -->
+<div class="modal-overlay hidden" id="adminModal">
+  <div class="modal modal-wide admin-modal">
+    <h3 class="modal-title">⚙ Admin Panel <span style="font-size:11px;color:var(--txt3);font-weight:400;margin-left:8px">writes go directly to Firestore</span></h3>
+    <div class="admin-tabs">
+      <button class="admin-tab active" data-tab="flags">Feature Flags</button>
+      <button class="admin-tab" data-tab="pricing">Pricing</button>
+      <button class="admin-tab" data-tab="subs">Subscribers</button>
+      <button class="admin-tab" data-tab="usage">Usage</button>
+      <button class="admin-tab" data-tab="paywall">Paywall</button>
+    </div>
+    <div class="admin-panel" id="adminPanelFlags"></div>
+    <div class="admin-panel hidden" id="adminPanelPricing"></div>
+    <div class="admin-panel hidden" id="adminPanelSubs"></div>
+    <div class="admin-panel hidden" id="adminPanelUsage"></div>
+    <div class="admin-panel hidden" id="adminPanelPaywall"></div>
+    <div class="modal-footer">
+      <button class="btn-sm-ghost" id="adminClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/storage.js?v=6"></script>
+<script src="js/subscription.js?v=6"></script>
+<script src="js/renderer.js?v=6"></script>
+<script src="js/sharing.js?v=6"></script>
+<script src="js/ai.js?v=6"></script>
+<script src="js/templates.js?v=6"></script>
+<script src="js/pdfhandler.js?v=6"></script>
+<script src="js/app.js?v=6"></script>
 </body>
 </html>

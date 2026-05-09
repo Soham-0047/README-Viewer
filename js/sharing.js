@@ -102,7 +102,7 @@ const Sharing = (() => {
   }
 
   // ── Create link (uses SDK — owner is authenticated) ──
-  async function createLink(db, fileId, content, title, expiryDays, maxViews) {
+  async function createLink(db, fileId, content, title, expiryDays, maxViews, opts = {}) {
     const projectId = _getProjectId();
     const token     = _token();
     const now       = new Date().toISOString();
@@ -116,6 +116,8 @@ const Sharing = (() => {
       maxViews: maxViews > 0 ? maxViews : 0,
       views: 0, uniqueViews: 0,
       active: true,
+      premium: opts.premium === true,
+      paywallHits: 0,
     };
 
     await db.collection(COLL).doc(token).set(doc);
@@ -419,7 +421,80 @@ const SharedViewer = (() => {
         ].join('');
       }
 
-      if (bodyEl) await Renderer.render(data.content, bodyEl, true);
+      // ── Paywall logic ──
+      // If link is marked premium, the viewer needs an active sub to read full.
+      const isPremium = data.premium === true;
+      let viewerIsPro = false;
+      try {
+        if (isPremium && typeof Subscription !== 'undefined') {
+          // Best-effort: works when viewer also has a Firebase project + signed-in
+          viewerIsPro = Subscription.isPro?.() === true;
+        }
+      } catch {}
+
+      if (isPremium && !viewerIsPro) {
+        // Bump paywall_hits analytics — fire and forget
+        try {
+          const newHits = (data.paywallHits || 0) + 1;
+          fetch(`https://firestore.googleapis.com/v1/projects/${pid}/databases/(default)/documents/mv_shared_links/${token}?updateMask.fieldPaths=paywallHits`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fields: { paywallHits: { integerValue: String(newHits) } } }),
+          }).catch(() => {});
+        } catch {}
+
+        // Render only first N lines (config-driven; default 80)
+        const previewLines = (typeof Subscription !== 'undefined'
+          ? Subscription.getConfig?.('paywall_preview_lines')
+          : 80) || 80;
+        const preview = data.content.split('\n').slice(0, previewLines).join('\n');
+        if (bodyEl) await Renderer.render(preview, bodyEl, true);
+        bodyEl?.classList.add('paywall-fade');
+
+        // Inject paywall card after content
+        const monthly = (typeof Subscription !== 'undefined' && Subscription.getConfig?.('pro_price_monthly')) || 5;
+        const yearly  = (typeof Subscription !== 'undefined' && Subscription.getConfig?.('pro_price_yearly')) || 45;
+        const trial   = (typeof Subscription !== 'undefined' && Subscription.getConfig?.('pro_trial_days')) || 0;
+
+        const card = document.createElement('div');
+        card.className = 'paywall-card';
+        card.innerHTML = `
+          <span class="paywall-card-label">You're reading a preview</span>
+          <h2 class="paywall-card-title">${_esc(data.title || 'Premium document')}</h2>
+          <p class="paywall-card-desc">Subscribe to continue reading this and unlock everything MarkVault offers.</p>
+          <div class="paywall-pricing">
+            <button class="active" data-billing="monthly"><span class="pp-price">$${monthly}</span><span class="pp-period">per month</span></button>
+            <button data-billing="yearly"><span class="pp-price">$${yearly}</span><span class="pp-period">per year</span></button>
+          </div>
+          <button class="paywall-cta">${trial > 0 ? `Start ${trial}-day free trial` : 'Subscribe to continue'}</button>
+          <a class="paywall-signin-link" href="./">Already subscribed? Sign in →</a>
+        `;
+        bodyEl?.parentNode?.appendChild(card);
+
+        // Wire pricing toggle + checkout
+        let billing = 'monthly';
+        card.querySelectorAll('.paywall-pricing button').forEach(b => {
+          b.addEventListener('click', () => {
+            card.querySelectorAll('.paywall-pricing button').forEach(x => x.classList.remove('active'));
+            b.classList.add('active');
+            billing = b.dataset.billing;
+          });
+        });
+        card.querySelector('.paywall-cta')?.addEventListener('click', async () => {
+          // Direct user to main app with intent — they sign in there & get checkout flow
+          try {
+            if (typeof Subscription !== 'undefined' && Subscription.startCheckout) {
+              await Subscription.startCheckout(billing);
+            } else {
+              window.location.href = './?upgrade=' + billing;
+            }
+          } catch (e) {
+            window.location.href = './?upgrade=' + billing;
+          }
+        });
+      } else {
+        if (bodyEl) await Renderer.render(data.content, bodyEl, true);
+      }
 
       document.getElementById('svSaveToVault')?.addEventListener('click', () => {
         Storage.save(data.title, data.content);
